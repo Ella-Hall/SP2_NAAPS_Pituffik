@@ -1,0 +1,513 @@
+---
+author: "Ella Hall"
+date: "`r Sys.Date()`"
+title: "HYSPLIT Processing"
+output: 
+  html_document:
+    code_folding: hide
+    theme: simplex
+    toc: yes
+    toc_float: 
+      collapsed: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 10,      # Set default plot width
+  fig.height = 6,     # Set default plot height
+  fig.align = "center" # Align plots to the center
+)
+```
+The goal of this script is to analyze the HYSPLIT data from the peak rBC dates that we found from the graphs. I want to determine:
+
+- What is the source of the airmass?
+
+- How long was each airmass in the mixing layer?
+
+- How long was the airmass near the SP2? Proximity as a function of time
+
+- Look at rainfall, mixing layer depth, relative humidity, altitude and sun flux
+
+**The "source" coordinates of the SP2 are: 76.51, -68.53**
+
+**The three vertical heights are:**
+
+**- 50m AGL**
+
+**- 100m AGL**
+
+**- 150m AGL**
+
+**The duration of the back trajectories is 315 hours (~13.125 days)**
+
+**The time of the start of the back trajectory is the time of the start of the peak in the graph for each date**
+
+# Load the Data
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(PNWColors)
+library(purrr)
+library(leaflet)
+library(htmltools)
+library(geosphere)
+```
+
+```{r}
+AllStats <- read.csv("All_SP2_Statistics_Seconds.csv")
+  # Drop NA rows
+AllStats <- na.omit(AllStats)
+
+# format date and time
+AllStats <- AllStats %>%
+  separate(Date_Time, into = c("Date", "Time_Min"), sep = " ")
+
+MODIS_Fires <- read.csv("MODIS_FireArchive.csv")
+MODIS_Fires$acq_date <- as.Date(MODIS_Fires$acq_date)
+
+
+SP2_FlightLogMerged <- read.csv("SP2_FlightLogMerged.csv")
+
+# June
+HYSPLIT_0624 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/June/0624/HYSPLIT_0624.csv")
+HYSPLIT_0627 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/June/0627/HYSPLIT_0627.csv")
+
+# July
+HYSPLIT_0711 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/July/0711/HYSPLIT_0711.csv")
+HYSPLIT_0718 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/July/0718/HYSPLIT_0718.csv")
+HYSPLIT_0729 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/July/0729/HYSPLIT_0729.csv")
+
+# August
+HYSPLIT_0807 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/August/0807/HYSPLIT_0807.csv")
+HYSPLIT_0813 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/August/0813/HYSPLIT_0813.csv")
+HYSPLIT_0815 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/August/0815/HYSPLIT_0815.csv")
+HYSPLIT_0823 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/August/0823/HYSPLIT_0823.csv")
+HYSPLIT_0827 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/August/0827/HYSPLIT_0827.csv")
+HYSPLIT_0829 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/August/0829/HYSPLIT_0829.csv")
+
+# September
+HYSPLIT_0919 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/September/0919/HYSPLIT_0919.csv")
+HYSPLIT_0925 <- read.csv("/Users/ellahall/Desktop/SP2_DataAnalysis/September/0925/HYSPLIT_0925.csv")
+```
+
+# June {.tabset}
+
+## 06/24 {.tabset}
+
+First, I will add a date and time column for each point.
+```{r}
+# start date and time
+start_0624 <- ymd_hms("2004-06-24 07:32:01") # add one second to match up with SP2 data
+
+# subtract one hour for each row
+HYSPLIT_0624$DateTime <- start_0624 - hours(HYSPLIT_0624$bthour)
+
+# Extract date
+HYSPLIT_0624$Date <- as.Date(HYSPLIT_0624$DateTime)
+
+# Calculate Seconds of Day
+HYSPLIT_0624$SecondsOfDay <- hour(HYSPLIT_0624$DateTime) * 3600 +
+                             minute(HYSPLIT_0624$DateTime) * 60 +
+                             second(HYSPLIT_0624$DateTime)
+```
+
+### Map Back Trajectories and Active Canadian Fires{.tabset}
+
+First, I will filter the fire data to just include 2024-06-11 (the last end point of the back trajectory) to 2024-06-24 (the date of the peak at the SP2, and start of back trajectory)
+
+```{r}
+Fires_0624 <- MODIS_Fires[MODIS_Fires$acq_date >= "2024-06-11" & MODIS_Fires$acq_date <= "2024-06-24", ]
+```
+
+
+Then, I will make a map with the lat and lon for the endpoints at each vertical level.
+
+```{r}
+# Convert to long-form
+Long_0624 <- HYSPLIT_0624 %>%
+  mutate(index = row_number()) %>%
+  pivot_longer(
+    cols = starts_with("lat_") | starts_with("lon_"),
+    names_to = c("coord", "level"), # coordinates, vertical level
+    names_sep = "_",
+    values_to = "value"
+  ) %>%
+  pivot_wider(names_from = coord, values_from = value) %>%
+  mutate(level = recode(level,
+                        "0" = "50m AGL",
+                        "1" = "100m AGL",
+                        "2" = "150m AGL"))
+```
+
+```{r}
+# create fire date palette
+# Convert dates to character for colorFactor
+firePalette <- colorFactor(palette = "YlOrRd", domain = as.character(Fires_0624$acq_date))
+
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+
+  # Polylines
+  addPolylines(data = filter(Long_0624, level == "50m AGL"),
+               lng = ~lon, lat = ~lat, color = "black", weight = 1, group = "50m AGL") %>%
+  addPolylines(data = filter(Long_0624, level == "100m AGL"),
+               lng = ~lon, lat = ~lat, color = "black", weight = 1, group = "100m AGL") %>%
+  addPolylines(data = filter(Long_0624, level == "150m AGL"),
+               lng = ~lon, lat = ~lat, color = "black", weight = 1, group = "150m AGL") %>%
+
+  # Circle markers with proper fillColor
+  addCircleMarkers(data = filter(Long_0624, level == "50m AGL"),
+                   lng = ~lon, lat = ~lat,
+                   fillColor = "cadetblue", color = "cadetblue",
+                   radius = 2, group = "50m AGL",
+                   stroke = FALSE, fillOpacity = 0.8) %>%
+
+  addCircleMarkers(data = filter(Long_0624, level == "100m AGL"),
+                   lng = ~lon, lat = ~lat,
+                   fillColor = "cornflowerblue", color = "cornflowerblue",
+                   radius = 2, group = "100m AGL",
+                   stroke = FALSE, fillOpacity = 0.8) %>%
+
+  addCircleMarkers(data = filter(Long_0624, level == "150m AGL"),
+                   lng = ~lon, lat = ~lat,
+                   fillColor = "darkblue", color = "darkblue",
+                   radius = 2, group = "150m AGL",
+                   stroke = FALSE, fillOpacity = 0.8) %>%
+  
+  # Add fire points colord by date
+  addCircleMarkers(data = Fires_0624,
+                 lng = ~longitude, lat = ~latitude,
+                 fillColor = ~firePalette(as.character(acq_date)),
+                 color = ~firePalette(as.character(acq_date)),
+                 radius = 3, group = "Fires",
+                 stroke = FALSE, fillOpacity = 0.9) %>%
+                     
+ # Layers control
+  addLayersControl(
+    overlayGroups = c("50m AGL", "100m AGL", "150m AGL"),
+    options = layersControlOptions(collapsed = FALSE),
+    position = "bottomleft"
+  ) %>%
+
+  # Legend for fire dates
+ addLegend("bottomright",
+          pal = firePalette,
+          values = as.character(Fires_0624$acq_date),
+          title = "Fire Detection Date") %>%
+  
+  # Add a title and description at the top-left
+  addControl(
+    html = tags$div(
+      style = "background-color: white; padding: 0px; border-radius: 0px;",
+      tags$h3("6/24/2024 Back Trajectories"),
+      tags$p("This map shows the modeled airmass trajectories at three vertical levels (50m, 100m, 150m AGL) from 06/24 back 315 hours, and active fire detections from June 11–24.")
+    ),
+    position = "topright"
+  )
+```
+
+From the plot, it looks like the airmass at 150m AGL originated in Eastern Canada, and the 100m AGL airmass originated on the West side of Baffin Bay. The 50m AGL airmass originated in Norway and is likely not a BB source. 
+
+
+### Time in Mixing Layer {.tabset}
+
+I want to know how long each airmass was in the mixing layer for. I know the altitude of each vertical level each hour, and the height of the mixing layer for each vertical level each hour. I can calculate when the airmasses were within the mixing layer for.
+```{r}
+# Create logical columns indicating if the airmass was within the mixing layer
+  # if altitude of airmass is less than or equal to the mixed layer height, TRUE. If not, FALSE
+HYSPLIT_0624$inML_0 <- HYSPLIT_0624$alt_0 <= HYSPLIT_0624$MixedLayer_0
+HYSPLIT_0624$inML_1 <- HYSPLIT_0624$alt_1 <= HYSPLIT_0624$MixedLayer_1
+HYSPLIT_0624$inML_2 <- HYSPLIT_0624$alt_2 <= HYSPLIT_0624$MixedLayer_2
+
+# Count total hours spent within the mixing layer for each airmass
+HoursInML_0624 <- data.frame(
+  Airmass = c("50mAGL", "100mAGL", "150mAGL"),
+  Hours = c(
+    sum(HYSPLIT_0624$inML_0, na.rm = TRUE),
+    sum(HYSPLIT_0624$inML_1, na.rm = TRUE),
+    sum(HYSPLIT_0624$inML_2, na.rm = TRUE)
+  )
+)
+
+print(HoursInML_0624)
+```
+It looks like the lowest airmass spent 21 hours (out of 315) in the mixed layer, the 100m airmass spent 3 hours in the mixed layer, and the 150m airmass spent 0 hours in the mixed layer. 
+
+### Proximity to SP2 as a Function of Time {.tabset}
+
+I want to know how long the airmass was "hanging around" the SP2. If the time is longer, this might indicate more local contamination and more time for the air to pick up stuff locally (airstrip, power plant, cars, etc.). If the airmass spent more time further from the SP2, this could indicate long-range transport from more distant sources (biomass burning, ship port). The `geosphere` package will be helpful here! It is a package that implements functions that compute various aspects of distance, direction, area for geographic coordinates.
+
+```{r}
+# Define source location
+SP2_lat <- 76.514
+SP2_lon <- -68.534
+```
+
+```{r}
+# compute distance to source
+  # use longform dataframe with lat, lon and level
+Long_0624 <- Long_0624 %>%
+  mutate(
+    dist_km = distHaversine(matrix(c(lon, lat), ncol = 2), # the shortest distance between two points "as the crow flies"
+                             c(SP2_lon, SP2_lat)) / 1000, # convert meters to km
+    # set proximity threshold to 50 km from SP2
+    near_SP2 = dist_km <= 50
+  )
+```
+
+```{r}
+# count number of hours each airmass was within 25km of the SP2 for
+Long_0624 %>%
+  group_by(level) %>%
+  summarize(
+    hours_near_sp2 = sum(near_SP2, na.rm = TRUE),
+    total_hours = n(), # 315 total hours
+    percent_hours_nearSP2 = 100 * hours_near_sp2 / total_hours
+  )
+```
+
+For all vertical levels, the airmass was hanging around within 50km of the SP2 for 29 hours, which is about 9% of the total time (out of 315 hours)
+
+```{r}
+ggplot(Long_0624, aes(x = DateTime, y = dist_km, color = level)) +
+  geom_line() +
+  geom_hline(yintercept = 50, linetype = "dashed", color = "black", weight = 2) +
+  scale_color_manual(
+    values = c(
+      "50m AGL" = "cadetblue",
+      "100m AGL" = "cornflowerblue",
+      "150m AGL" = "darkblue"
+    )
+  ) +
+  scale_x_datetime(
+    date_breaks = "1 day",    # show a tick for each day
+    date_labels = "%b %d"     # format as "Jun 11", "Jun 12", etc.
+  ) +
+  labs(
+    title = "Airmass Proximity to SP2 Over Time",
+    subtitle = "Dashed line indicates 25 km from SP2",
+    x = "Time",
+    y = "Distance to SP2 (km)",
+    color = "Vertical Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # optional: rotate labels for readability
+```
+
+## 06/27 {.tabset}
+
+First, I will add a date and time column for each point.
+```{r}
+# start date and time
+start_0627 <- ymd_hms("2004-06-27 09:41:01") # add one second to match up with SP2 data
+
+# subtract one hour for each row
+HYSPLIT_0627$DateTime <- start_0627 - hours(HYSPLIT_0627$bthour)
+
+# Extract date
+HYSPLIT_0627$Date <- as.Date(HYSPLIT_0627$DateTime)
+
+# Calculate Seconds of Day
+HYSPLIT_0627$SecondsOfDay <- hour(HYSPLIT_0627$DateTime) * 3600 +
+                             minute(HYSPLIT_0627$DateTime) * 60 +
+                             second(HYSPLIT_0627$DateTime)
+```
+
+### Map Back Trajectories and Active Canadian Fires{.tabset}
+
+First, I will filter the fire data to just include 2024-06-14 (the last end point of the back trajectory) to 2024-06-27 (the date of the peak at the SP2, and start of back trajectory)
+
+```{r}
+Fires_0627 <- MODIS_Fires[MODIS_Fires$acq_date >= "2024-06-14" & MODIS_Fires$acq_date <= "2024-06-27", ]
+```
+
+
+Then, I will make a map with the lat and lon for the endpoints at each vertical level.
+
+```{r}
+# Convert to long-form
+Long_0627 <- HYSPLIT_0627 %>%
+  mutate(index = row_number()) %>%
+  pivot_longer(
+    cols = starts_with("lat_") | starts_with("lon_"),
+    names_to = c("coord", "level"), # coordinates, vertical level
+    names_sep = "_",
+    values_to = "value"
+  ) %>%
+  pivot_wider(names_from = coord, values_from = value) %>%
+  mutate(level = recode(level,
+                        "0" = "50m AGL",
+                        "1" = "100m AGL",
+                        "2" = "150m AGL"))
+```
+
+```{r}
+# create fire date palette
+# Convert dates to character for colorFactor
+firePalette <- colorFactor(palette = "YlOrRd", domain = as.character(Fires_0627$acq_date))
+
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+
+  # Polylines
+  addPolylines(data = filter(Long_0627, level == "50m AGL"),
+               lng = ~lon, lat = ~lat, color = "black", weight = 1, group = "50m AGL") %>%
+  addPolylines(data = filter(Long_0627, level == "100m AGL"),
+               lng = ~lon, lat = ~lat, color = "black", weight = 1, group = "100m AGL") %>%
+  addPolylines(data = filter(Long_0627, level == "150m AGL"),
+               lng = ~lon, lat = ~lat, color = "black", weight = 1, group = "150m AGL") %>%
+
+  # Circle markers with proper fillColor
+  addCircleMarkers(data = filter(Long_0627, level == "50m AGL"),
+                   lng = ~lon, lat = ~lat,
+                   fillColor = "cadetblue", color = "cadetblue",
+                   radius = 2, group = "50m AGL",
+                   stroke = FALSE, fillOpacity = 0.8) %>%
+
+  addCircleMarkers(data = filter(Long_0627, level == "100m AGL"),
+                   lng = ~lon, lat = ~lat,
+                   fillColor = "cornflowerblue", color = "cornflowerblue",
+                   radius = 2, group = "100m AGL",
+                   stroke = FALSE, fillOpacity = 0.8) %>%
+
+  addCircleMarkers(data = filter(Long_0627, level == "150m AGL"),
+                   lng = ~lon, lat = ~lat,
+                   fillColor = "darkblue", color = "darkblue",
+                   radius = 2, group = "150m AGL",
+                   stroke = FALSE, fillOpacity = 0.8) %>%
+  
+  # Add fire points colord by date
+  addCircleMarkers(data = Fires_0627,
+                 lng = ~longitude, lat = ~latitude,
+                 fillColor = ~firePalette(as.character(acq_date)),
+                 color = ~firePalette(as.character(acq_date)),
+                 radius = 3, group = "Fires",
+                 stroke = FALSE, fillOpacity = 0.9) %>%
+                     
+ # Layers control
+  addLayersControl(
+    overlayGroups = c("50m AGL", "100m AGL", "150m AGL"),
+    options = layersControlOptions(collapsed = FALSE),
+    position = "bottomleft"
+  ) %>%
+
+  # Legend for fire dates
+ addLegend("bottomright",
+          pal = firePalette,
+          values = as.character(Fires_0627$acq_date),
+          title = "Fire Detection Date") %>%
+  
+  # Add a title and description at the top-left
+  addControl(
+    html = tags$div(
+      style = "background-color: white; padding: 0px; border-radius: 0px;",
+      tags$h3("6/27/2024 Back Trajectories"),
+      tags$p("This map shows the modeled airmass trajectories at three vertical levels (50m, 100m, 150m AGL) from 06/27 back 315 hours, and active fire detections from June 14–27.")
+    ),
+    position = "topright"
+  )
+```
+
+It looks like none of the airmasses on 06/27 originated in Canada. The sources of rBC are likely not from biomass burning in Canada for this peak.
+
+### Time in Mixing Layer {.tabset}
+
+I want to know how long each airmass was in the mixing layer for. I know the altitude of each vertical level each hour, and the height of the mixing layer for each vertical level each hour. I can calculate when the airmasses were within the mixing layer for.
+```{r}
+# Create logical columns indicating if the airmass was within the mixing layer
+  # if altitude of airmass is less than or equal to the mixed layer height, TRUE. If not, FALSE
+HYSPLIT_0627$inML_0 <- HYSPLIT_0627$alt_0 <= HYSPLIT_0627$MixedLayer_0
+HYSPLIT_0627$inML_1 <- HYSPLIT_0627$alt_1 <= HYSPLIT_0627$MixedLayer_1
+HYSPLIT_0627$inML_2 <- HYSPLIT_0627$alt_2 <= HYSPLIT_0627$MixedLayer_2
+
+# Count total hours spent within the mixing layer for each airmass
+HoursInML_0627 <- data.frame(
+  Airmass = c("50mAGL", "100mAGL", "150mAGL"),
+  Hours = c(
+    sum(HYSPLIT_0627$inML_0, na.rm = TRUE),
+    sum(HYSPLIT_0627$inML_1, na.rm = TRUE),
+    sum(HYSPLIT_0627$inML_2, na.rm = TRUE)
+  )
+)
+
+print(HoursInML_0627)
+```
+It looks like the lowest airmass spent 23 hours (out of 315) in the mixed layer, the 100m airmass spent 7 hours in the mixed layer, and the 150m airmass spent 1 hour in the mixed layer. 
+
+### Proximity to SP2 as a Function of Time {.tabset}
+
+I want to know how long the airmass was "hanging around" the SP2. If the time is longer, this might indicate more local contamination and more time for the air to pick up stuff locally (airstrip, power plant, cars, etc.). If the airmass spent more time further from the SP2, this could indicate long-range transport from more distant sources (biomass burning, ship port). The `geosphere` package will be helpful here! It is a package that implements functions that compute various aspects of distance, direction, area for geographic coordinates.
+
+```{r}
+# Define source location
+SP2_lat <- 76.514
+SP2_lon <- -68.534
+```
+
+```{r}
+# compute distance to source
+  # use longform dataframe with lat, lon and level
+Long_0627 <- Long_0627 %>%
+  mutate(
+    dist_km = distHaversine(matrix(c(lon, lat), ncol = 2), # the shortest distance between two points "as the crow flies"
+                             c(SP2_lon, SP2_lat)) / 1000, # convert meters to km
+    # set proximity threshold to 50 km from SP2
+    near_SP2 = dist_km <= 50
+  )
+```
+
+```{r}
+# count number of hours each airmass was within 25km of the SP2 for
+Long_0627 %>%
+  group_by(level) %>%
+  summarize(
+    hours_near_sp2 = sum(near_SP2, na.rm = TRUE),
+    total_hours = n(), # 315 total hours
+    percent_hours_nearSP2 = 100 * hours_near_sp2 / total_hours
+  )
+```
+
+For 50, 100 and 150m, the airmass was near the SP2 for 6, 5 and 7 hours, respectively. Out of 316 total hours.
+
+```{r}
+ggplot(Long_0627, aes(x = DateTime, y = dist_km, color = level)) +
+  geom_line() +
+  geom_hline(yintercept = 50, linetype = "dashed", color = "black", weight = 2) +
+  scale_color_manual(
+    values = c(
+      "50m AGL" = "cadetblue",
+      "100m AGL" = "cornflowerblue",
+      "150m AGL" = "darkblue"
+    )
+  ) +
+  scale_x_datetime(
+    date_breaks = "1 day",    # show a tick for each day
+    date_labels = "%b %d"     # format as "Jun 11", "Jun 12", etc.
+  ) +
+  labs(
+    title = "Airmass Proximity to SP2 Over Time",
+    subtitle = "Dashed line indicates 25 km from SP2",
+    x = "Time",
+    y = "Distance to SP2 (km)",
+    color = "Vertical Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # optional: rotate labels for readability
+```
+From this plot, it looks like the lowest airmass stayed relatively close to the SP2 earlier in the summer around June 17th and 18th.
+
+
+
+
+
+
+
+

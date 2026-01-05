@@ -1,0 +1,879 @@
+---
+author: "Ella Hall"
+date: "`r Sys.Date()`"
+title: "NAAPS Data Analysis"
+output: 
+  html_document:
+    code_folding: hide
+    theme: simplex
+    toc: yes
+    toc_float: 
+      collapsed: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 10,      # Set default plot width
+  fig.height = 6,     # Set default plot height
+  fig.align = "center" # Align plots to the center
+)
+```
+
+# Goals of Analysis
+
+The goals of this script are to:
+
+-   Explore the NAAPS smoke, dust and ABF data during from the Pituffik area during the time that the SP2 was collecting measurements
+
+-   Assess the patterns between the NAAPS data and the SP2 data
+
+-   Find high smoke deposition events during the time period that the SP2 was collecting data and work backwards to assess the SP2 data during these times
+
+# Load the Data
+
+**Packages**
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(PNWColors)
+library(stringr)
+library(purrr)
+library(patchwork)
+```
+
+**Data**
+
+*All SP2 Stats -- minutely*
+
+```{r}
+AllStats <- read.csv("All_SP2_Statistics_Seconds.csv")
+  # Drop NA rows
+  AllStats <- na.omit(AllStats)
+
+# split the `Date_Time` column to just have the date
+AllStats <- AllStats %>%
+  separate(Date_Time, into = c("Date", "Time_Min"), sep = " ")
+head(AllStats)
+
+# Clean up date format
+AllStats$Date <- as.Date(as.character(AllStats$Date), format = "%Y%m%d")
+```
+
+*Flight Log*
+
+```{r}
+FlightLog <- read.csv("FlightData_Cleaned.csv")
+```
+
+*SP2 and Flight Log merged*
+
+```{r}
+SP2_FlightLogMerged <- read.csv("SP2_FlightLogMerged.csv")
+```
+
+*NAAPS Data*
+
+```{r}
+Pituffik_NAAPS <- read.csv("Pituffik_SP2_NAAPS_Data.csv")
+# Clean up date format
+Pituffik_NAAPS$Date <- as.Date(Pituffik_NAAPS$Date)
+
+Pituffik_SurfConc <- read.csv("PituffikSurfaceConcentrations_SP2.csv")
+Pituffik_SurfConc$Date <- as.Date(Pituffik_SurfConc$Date)
+```
+
+# NAAPS Data Exploration {.tabset}
+
+## Plotting {.tabset}
+
+I will start by plotting smoke, dust and ABF over the time period of the dataset to get an idea of when there may have been high deposition events.
+
+### Smoke {.tabset}
+
+**Surface Concentration**
+
+```{r}
+ggplot(Pituffik_SurfConc, aes(x = Date, y = smoke_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "coral2") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Smoke Surface Concentration over Time",
+    x = "Date",
+    y = "Deposition (ug/m3/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+It looks like the highest surface concentrations were between August 11 - 14, and then between August 21 - 27. Looks like surface concentration follows a similar pattern to dry deposition, which makes sense!
+
+**Dry Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = smoke_drysink)) +
+  geom_bar(stat = "identity", fill = "firebrick") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Dry Smoke Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+August 12th was the date with the highest dry deposition by FAR! The highest deposition amounts were between August 11th and August 26th.
+
+I had run a HYSPLIT back trajectory for August 13th, and the airmass did originate in Northern Canada! August 21 and 22 were two other high smoke deposition days, and I had run a HYSPLIT back trajectory for August 23rd, but that airmass did not originate in Canada. It looks like it camoe from the Southern part of the ice sheet and from the scandinavian region.
+
+The biggest peak was between August 11th and 14th, then there was another between August 21st and 26th. I could run back trajectories for these days and see where those airmasses were coming from. I hypothesize Canada?
+
+**Wet Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = smoke_wetsink)) +
+  geom_bar(stat = "identity", fill = "steelblue4") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Wet Smoke Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+There was a peak in wet deposition between August 11th and 12th, as well as the end of August from August 21 - 28. Similar to dry deposition.
+
+**Total Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = smoke_totsink)) +
+  geom_bar(stat = "identity", fill = "seagreen4") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Total Smoke Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Same as wet deposiiton pretty much.
+
+### Dust {.tabset}
+
+**Surface Concentration**
+```{r}
+ggplot(Pituffik_SurfConc, aes(x = Date, y = dust_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "brown2") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Dust Surface Concentration over Time",
+    x = "Date",
+    y = "Deposition (ug/m3/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+Again, looks similar to dry dust deposition. There is a really high peak between September 22 and 25, and elevated levels between August 28 and September 14th ish. 
+
+
+**Dry Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = dust_drysink)) +
+  geom_bar(stat = "identity", fill = "firebrick4") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Dry Dust Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Dry dust deposition was more consistent through the summer. The date of highest deposition was September 24th. There was also a bit of a peak around when dry smoke was peaking.
+
+**Wet Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = dust_wetsink)) +
+  geom_bar(stat = "identity", fill = "steelblue1") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Wet Dust Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+The highest wet dust deposition was between August 21 and August 28.
+
+**Total Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = dust_totsink)) +
+  geom_bar(stat = "identity", fill = "seagreen2") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Total Dust Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Similar to wet dust.
+
+### ABF {.tabset}
+
+**Surface Concentration**
+
+```{r}
+ggplot(Pituffik_SurfConc, aes(x = Date, y = abf_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "seagreen") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "ABF Surface Concentration over Time",
+    x = "Date",
+    y = "Deposition (ug/m3/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+Similar to dust, there is a peak on September 23rd and elevated levels starting at the end of August. 
+
+**Dry Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = abf_drysink)) +
+  geom_bar(stat = "identity", fill = "firebrick2") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Dry ABF Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+The highest dry ABF deposition was September 23rd. The most prominent and long-lasting peak was between August 29th and the end of the time period (September 30th).
+
+**Wet Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = abf_wetsink)) +
+  geom_bar(stat = "identity", fill = "steelblue3") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Wet ABF Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Wet ABF peaked on August 22nd. Then continued through August 29th.
+
+**Total Deposition**
+
+```{r}
+ggplot(Pituffik_NAAPS, aes(x = Date, y = abf_totsink)) +
+  geom_bar(stat = "identity", fill = "green4") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Total ABF Deposition over Time",
+    x = "Date",
+    y = "Deposition (mg/m²/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Similar to wet.
+
+## Dust, Smoke, ABF Summaries {.tabset}
+
+I will summarize the data for each variable and deposition type. I am interested in seeing:
+
+- When the max deposition occurred
+
+- Average deposition
+
+- Median deposition
+
+- Standard deviation
+
+- Top 5 highest deposition days
+
+### Smoke {.tabset}
+
+```{r}
+Smoke_SummaryStats <- Pituffik_NAAPS %>%
+  summarise(
+    MeanDry = mean(smoke_drysink),
+    MeanWet = mean(smoke_wetsink),
+    MeanTot = mean(smoke_totsink),
+    MaxDry = max(smoke_drysink),
+    MaxWet = max(smoke_wetsink),
+    MaxTot = max(smoke_totsink),
+    SDDry = sd(smoke_drysink),
+    SDWet = sd(smoke_wetsink),
+    SDTot = sd(smoke_totsink)
+  )
+
+Smoke_SummaryStats
+```
+The max dry event deposited 0.1163 mg/m2 that day. Not super high, but decently so. Max wet was much higher at 54.78 mg/m2.
+
+
+**Top 5 deposition days:**
+```{r}
+SmokeTop5 <- Pituffik_NAAPS %>%
+  select(Date, smoke_drysink, smoke_wetsink, smoke_totsink) %>%
+  pivot_longer(
+    cols = starts_with("smoke_"),
+    names_to = "DepositionType",
+    values_to = "Value"
+  ) %>%
+  group_by(DepositionType) %>%
+  arrange(desc(Value), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup()
+
+SmokeTop5
+```
+All of the highest deposition days were in August. August 13th was the highest deposition day for wet, dry and total. August 12, 13, 14 seem to all be high days, as well as August 19 - 23.
+
+
+### Dust {.tabset}
+
+```{r}
+Dust_SummaryStats <- Pituffik_NAAPS %>%
+  summarise(
+    MeanDry = mean(dust_drysink),
+    MeanWet = mean(dust_wetsink),
+    MeanTot = mean(dust_totsink),
+    MaxDry = max(dust_drysink),
+    MaxWet = max(dust_wetsink),
+    MaxTot = max(dust_totsink),
+    SDDry = sd(dust_drysink),
+    SDWet = sd(dust_wetsink),
+    SDTot = sd(dust_totsink)
+  )
+
+Dust_SummaryStats
+```
+The max dry dust deposition was a bit higher than the max smoke deposition. The max wet and total were much lower, though!
+
+**Top 5 deposition days:**
+```{r}
+DustTop5 <- Pituffik_NAAPS %>%
+  select(Date, dust_drysink, dust_wetsink, dust_totsink) %>%
+  pivot_longer(
+    cols = starts_with("dust_"),
+    names_to = "DepositionType",
+    values_to = "Value"
+  ) %>%
+  group_by(DepositionType) %>%
+  arrange(desc(Value), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup()
+
+DustTop5
+```
+
+The dates of max dust deposition are more variable than smoke was. Max dry dust was September 24, total and wet dust were both August 22.
+
+
+### ABF {.tabset}
+
+```{r}
+ABF_SummaryStats <- Pituffik_NAAPS %>%
+  summarise(
+    MeanDry = mean(abf_drysink),
+    MeanWet = mean(abf_wetsink),
+    MeanTot = mean(abf_totsink),
+    MaxDry = max(abf_drysink),
+    MaxWet = max(abf_wetsink),
+    MaxTot = max(abf_totsink),
+    SDDry = sd(abf_drysink),
+    SDWet = sd(abf_wetsink),
+    SDTot = sd(abf_totsink)
+  )
+
+ABF_SummaryStats
+```
+Max dry ABF was lower than max dry smoke and dust. Same with wet and total. Very small deposition amounts.
+
+
+**Top 5 deposition days:**
+```{r}
+ABFTop5 <- Pituffik_NAAPS %>%
+  select(Date, abf_drysink, abf_wetsink, abf_totsink) %>%
+  pivot_longer(
+    cols = starts_with("abf_"),
+    names_to = "DepositionType",
+    values_to = "Value"
+  ) %>%
+  group_by(DepositionType) %>%
+  arrange(desc(Value), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup()
+
+ABFTop5
+```
+
+Max dry ABF was september 24, max total ABF was August 22, and same with wet ABF. These are the same dates as max dust.
+
+### Surface Concentrations {.tabset}
+```{r}
+SfcConc_Summary <- Pituffik_SurfConc %>%
+  summarise(
+    MeanSmokeConc = mean(smoke_conc_sfc),
+    MeanDustConc = mean(dust_conc_sfc),
+    MeanABFConc = mean(abf_conc_sfc),
+    MaxSmokeConc = max(smoke_conc_sfc),
+    MaxDustConc = max(dust_conc_sfc),
+    MaxABFConc = max(abf_conc_sfc),
+    SDSmokeConc = sd(smoke_conc_sfc),
+    SDDustConc = sd(dust_conc_sfc),
+    SDABFConc = sd(abf_conc_sfc)
+  )
+SfcConc_Summary
+```
+Dust has the highest max surface concentrations, then smoke, then ABF.
+
+**Top 5 deposition days:**
+```{r}
+SurfConcTop5 <- Pituffik_SurfConc %>%
+  select(Date, smoke_conc_sfc, dust_conc_sfc, abf_conc_sfc) %>%
+  pivot_longer(
+    cols = matches("^(abf|smoke|dust)_"),  # regex to match any of the three prefixes
+    names_to = "DepositionType",
+    values_to = "Value"
+  ) %>%
+  group_by(DepositionType) %>%
+  arrange(desc(Value), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup()
+
+SurfConcTop5
+```
+ABF top 5 were all in september. Dust was either september or august, with the 5th highest in June. Smoke concentrations were all around the middle to end of August.
+
+
+# SP2 Data Exploration {.tabset}
+
+I will start by looking at what was happening in the SP2 data for August 12 - 23ish, and especially August 13th since that was the date of max smoke deposition.
+
+I am also curious how that compares with September 24 and August 22, which were the two max dates for dust and ABF.
+
+The SP2 data is minutely, and the NAAPS data is daily, so I will upscale the SP2 data to daily averages for each variable and then merge that with the NAAPS data so that I can compare days with known high deposition amounts.
+```{r}
+DailySP2 <- SP2_FlightLogMerged %>%
+mutate(
+    DateTime = as.POSIXct(paste(Date, Time_Min), format = "%Y-%m-%d %H:%M:%S"))
+```
+
+Then, compute daily averages for the following variables:
+
+- Average incandescent particle concentration (# / cm^3)
+
+- Average incandescent mass concentration (ng / m^3)
+
+- Average total mass (fg) (femtograms)
+
+- Scattering particle concentration (#/cm^3)
+
+```{r}
+DailySP2 <- DailySP2 %>%
+  group_by(Date) %>%
+  summarize(
+    DailyIncandParticle = mean(IncandParticleConc, na.rm = TRUE),
+    DailyIncandMass = mean(IncandMassConc, na.rm = TRUE),
+    DailyTotMass = mean(TotalMass, na.rm = TRUE),
+    DailyScatteringParticle = mean(ScatteringParticleConc, na.rm = TRUE))
+
+# convert to date format
+DailySP2$Date <- as.Date(DailySP2$Date)
+```
+
+Then, I will merge this with the NAAPS data:
+```{r}
+DailySP2_NAAPS <- left_join(DailySP2, Pituffik_NAAPS, by = c("Date"))
+
+# merge with surface concentration data
+DailySP2_NAAPS_SurfConc <- left_join(DailySP2, Pituffik_SurfConc, by = c("Date"))
+```
+
+And pivot to long format for plotting:
+```{r}
+# Pivot to long format
+IncandParticle_Long <- DailySP2_NAAPS %>%
+  select(Date, DailyIncandParticle, smoke_drysink) %>%
+  pivot_longer(
+    cols = c(DailyIncandParticle, smoke_drysink),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+```
+
+Pivot surface concentration dataframe for plotting too:
+```{r}
+# Pivot to long format
+IncandParticle_Long_Sfc <- DailySP2_NAAPS_SurfConc %>%
+  select(Date, DailyIncandParticle, smoke_conc_sfc) %>%
+  pivot_longer(
+    cols = c(DailyIncandParticle, smoke_conc_sfc),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+```
+
+
+## Average Incandescent Particle Concentration {.tabset}
+
+### Dry Smoke Deposition {.tabset}
+
+The average incandescent particle concentration is the average concentration of incandescing particles (e.g. BC particles that emit light when heated by the laser in the SP2) measured during a specified time interval. I would expect the average incandescent particle concentration to be higher on days with high smoke deposition.
+
+
+```{r}
+IncandPlot <- ggplot(filter(IncandParticle_Long, Variable == "DailyIncandParticle"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "purple4") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "#/cm^3", x = "Date", title = "Incandescent Particle Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+SmokePlot <- ggplot(filter(IncandParticle_Long, Variable == "smoke_drysink"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "mg/m²/day", x = "Date", title = "Smoke Dry Deposition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+# Combine them vertically
+IncandPlot / SmokePlot
+```
+
+From this plot, it looks like the incandescent particle concentration follows a fairly similar trend to smoke deposition. The highest incandescent particle concentration was August 14th, and the highest smoke deposition was on August 12th. When incandescent particle concentration spikes, it seems like smoke deposition spikes just before it.
+
+I will also test the correlation between the incandescent particle concentration and dry smoke deposition to see how well these variables are related. I will use a Spearman correlation since the data are non-linear and non-normally distributed.
+```{r}
+cor.test(DailySP2_NAAPS$smoke_drysink, DailySP2_NAAPS$DailyIncandParticle, method = "spearman")
+```
+There is a moderate negative correlation between daily smoke deposition and incandescent particle concentration (rho = -0.167, p > 0.05). This suggests that higher smoke deposition = lower incandescent particle concentrations? This doesn't make a ton of sense to me, but it could be due to the lag between smoke deposition and higher incandescent particle concentrations.
+
+### Smoke Surface Concentration {.tabset}
+
+```{r}
+IncandPlot <- ggplot(filter(IncandParticle_Long, Variable == "DailyIncandParticle"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "purple4") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "#/cm^3", x = "Date", title = "Incandescent Particle Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+
+
+Smoke_SFC_Plot <- ggplot(filter(IncandParticle_Long_Sfc, Variable == "smoke_conc_sfc"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "darkorange4") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "ug/m3/day", x = "Date", title = "Smoke Surface Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+# Combine them vertically
+IncandPlot / Smoke_SFC_Plot
+```
+
+This looks similar to the relationship between dry smoke and incandescent particle concentration. There again seems to be a lag between the peak smoke surface concentrations and the peak incandescent particle concentrations. Only a day or two.
+
+I will also test the correlation between the incandescent particle concentration and surface smoke concentration to see how well these variables are related. I will use a Spearman correlation since the data are non-linear and non-normally distributed.
+```{r}
+cor.test(DailySP2_NAAPS_SurfConc$smoke_conc_sfc, DailySP2_NAAPS_SurfConc$DailyIncandParticle, method = "spearman")
+```
+There is a non-significant, weak negative correlation (rho = -0.0178, p > 0.05). This suggests that higher surface smoke concentrations are associated with lower incandescent particle concentrations, but this is not a statistically significant relationship.
+
+## Average Incandescent Mass Concentration {.tabset}
+
+### Dry Smoke Deposition {.tabset}
+
+The average incandescent mass concentration is the average mass of incandescing particles (rBC). 
+
+```{r}
+# Pivot to long format
+IncandMass_Long <- DailySP2_NAAPS %>%
+  select(Date, DailyIncandMass, smoke_drysink) %>%
+  pivot_longer(
+    cols = c(DailyIncandMass, smoke_drysink),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+```
+
+```{r}
+IncandMassPlot <- ggplot(filter(IncandMass_Long, Variable == "DailyIncandMass"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "steelblue4") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "ng/m^3", x = "Date", title = "Incandescent Mass Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+SmokePlot <- ggplot(filter(IncandMass_Long, Variable == "smoke_drysink"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "mg/m²/day", x = "Date", title = "Smoke Dry Deposition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+# Combine them vertically
+IncandMassPlot / SmokePlot
+```
+
+There seems to be a similar, though less obvious correlation between smoke depostition and incandescent mass concentration. The date of highest incandescent mass concentration was July 10th. July 10, 11, 12 were not particularly high smoke deposition days.
+
+I will also test the correlation between the incandescent mass concentration and dry smoke deposition to see how well these variables are related. I will use a Spearman correlation since the data are non-linear and non-normally distributed.
+```{r}
+cor.test(DailySP2_NAAPS$smoke_drysink, DailySP2_NAAPS$DailyIncandMass, method = "spearman")
+```
+
+The correlation coefficient is -0.131 (p > 0.05), suggesting a weak negative correlation between daily smoke deposition and incandescent particle mass. The negative relationship means that as dry smoke deposition increases, incandescent particle mass decreases? This is potentially due to a lag between smoke deposition and incandescent mass concentration.
+
+### Smoke Surface Concentration {.tabset}
+
+```{r}
+IncandMassPlot <- ggplot(filter(IncandMass_Long, Variable == "DailyIncandMass"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "steelblue4") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "ng/m^3", x = "Date", title = "Incandescent Mass Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+Smoke_SFC_Plot <- ggplot(filter(IncandParticle_Long_Sfc, Variable == "smoke_conc_sfc"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "darkorange4") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "ug/m3/day", x = "Date", title = "Smoke Surface Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+# Combine them vertically
+IncandMassPlot / Smoke_SFC_Plot
+```
+It doesn't look like there is any correlation that really jumps out to me. 
+
+I will also test the correlation between the incandescent mass concentration and dry smoke deposition to see how well these variables are related. I will use a Spearman correlation since the data are non-linear and non-normally distributed.
+```{r}
+cor.test(DailySP2_NAAPS_SurfConc$smoke_conc_sfc, DailySP2_NAAPS_SurfConc$DailyIncandMass, method = "spearman")
+```
+There is a non-significant positive correlation between incandescent mass concentration and surface smoke concentration (rho = 0.0053, p > 0.05). This suggests that higher surface smoke concnentrations are weakly associated with higher incandescent mass concentrations. 
+
+## Total Mass {.tabset}
+
+### Dry Smoke Deposition {.tabset}
+
+The average total mass is the average total mass (in femtograms) of all detected particles incandescing, representing the overall rBC burden in the air. I expect this to have a strong correlation with smoke deposition as well.
+
+```{r}
+# Pivot to long format
+TotalMass_Long <- DailySP2_NAAPS %>%
+  select(Date, DailyTotMass, smoke_drysink) %>%
+  pivot_longer(
+    cols = c(DailyTotMass, smoke_drysink),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+```
+
+```{r}
+TotalMassPlot <- ggplot(filter(TotalMass_Long, Variable == "DailyTotMass"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "salmon") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "fg", x = "Date", title = "Total Mass") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+SmokePlot <- ggplot(filter(TotalMass_Long, Variable == "smoke_drysink"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "mg/m²/day", x = "Date", title = "Smoke Dry Deposition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+# Combine them vertically
+TotalMassPlot / SmokePlot
+```
+
+Total mass looks really similar to incandescent mass. There seems to be a couple day lag too.
+
+I will also test the correlation between the total mass concentration and dry smoke deposition to see how well these variables are related. I will use a Spearman correlation since the data are non-linear and non-normally distributed.
+```{r}
+cor.test(DailySP2_NAAPS$smoke_drysink, DailySP2_NAAPS$DailyTotMass, method = "spearman")
+```
+There is a pretty weak, negative correlation between total mass and dry smoke deposition (rho = -0.128, p > 0.05). This suggests that higher smoke deposition is associated with lower total mass.
+
+### Smoke Surface Concentration {.tabset}
+
+```{r}
+TotalMassPlot <- ggplot(filter(TotalMass_Long, Variable == "DailyTotMass"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "salmon") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "fg", x = "Date", title = "Total Mass") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+Smoke_SFC_Plot <- ggplot(filter(IncandParticle_Long_Sfc, Variable == "smoke_conc_sfc"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "darkorange4") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "ug/m3/day", x = "Date", title = "Smoke Surface Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+# Combine them vertically
+TotalMassPlot / Smoke_SFC_Plot
+```
+
+This plot again looks the same as the one above.
+
+I will also test the correlation between the total mass concentration and dry smoke deposition to see how well these variables are related. I will use a Spearman correlation since the data are non-linear and non-normally distributed.
+```{r}
+cor.test(DailySP2_NAAPS_SurfConc$smoke_conc_sfc, DailySP2_NAAPS_SurfConc$DailyTotMass, method = "spearman")
+```
+There is a non-significant negative correlation between smoke surface concentration and average total mass (rho = -0.002, p > 0.05). This suggests that higher smoke surface concentration is associated with lower total mass concentrations.
+
+## Scattering Particle Concentration : Dust {.tabset}
+
+### Dry Dust Deposition {.tabset}
+
+I will also look at the scattering particle concentration, which is the concentration of non-rBC particles (like dust) and see how that is correlated with dry dust deposition:
+
+```{r}
+# Pivot to long format
+ScatteringConc_Long <- DailySP2_NAAPS %>%
+  select(Date, DailyScatteringParticle, dust_drysink) %>%
+  pivot_longer(
+    cols = c(DailyScatteringParticle, dust_drysink),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+```
+
+```{r}
+ScatteringConcPlot <- ggplot(filter(ScatteringConc_Long, Variable == "DailyScatteringParticle"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "salmon") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "fg", x = "Date", title = "Scattering Particle Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+DustPlot <- ggplot(filter(ScatteringConc_Long, Variable == "dust_drysink"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "darkgray") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "mg/m²/day", x = "Date", title = "Dust Dry Deposition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+# Combine them vertically
+ScatteringConcPlot / DustPlot
+```
+
+There doesn't seem to be a substantial correlation between these variables either. The highest dust deposition event was on September 23rd, and that was also a day with high scattering particle concentration, but the plots do not look very similar.
+
+I can also assess the actual correlation:
+```{r}
+cor.test(DailySP2_NAAPS$dust_drysink, DailySP2_NAAPS$DailyScatteringParticle, method = "spearman")
+```
+
+There is a weak, non-significant negative correlation between dry dust deposition and daily scattering particle concentration. 
+
+### Dust Surface Concentration {.tabset}
+
+```{r}
+# Pivot to long format
+ScatteringConc_Long_SFC <- DailySP2_NAAPS_SurfConc %>%
+  select(Date, DailyScatteringParticle, dust_conc_sfc) %>%
+  pivot_longer(
+    cols = c(DailyScatteringParticle, dust_conc_sfc),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+```
+
+
+```{r}
+ScatteringConcPlot <- ggplot(filter(ScatteringConc_Long_SFC, Variable == "DailyScatteringParticle"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "salmon") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "fg", x = "Date", title = "Scattering Particle Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+DustPlot_SFC <- ggplot(filter(ScatteringConc_Long_SFC, Variable == "dust_conc_sfc"),
+             aes(x = Date, y = Value)) +
+  geom_bar(stat = "identity", fill = "darkgray") +
+    scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(y = "mg/m²/day", x = "Date", title = "Dust Surface Concentration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 6))
+
+# Combine them vertically
+ScatteringConcPlot / DustPlot_SFC
+```
+There doesn't seem to be a substantial correlation between these variables either. The highest dust surface concentration was on September 23rd, and that was also a day with high scattering particle concentration, but the plots do not look very similar.
+
+I can also assess the actual correlation:
+```{r}
+cor.test(DailySP2_NAAPS_SurfConc$dust_conc_sfc, DailySP2_NAAPS_SurfConc$DailyScatteringParticle, method = "spearman")
+```
+There is a non-significant negative correlation between dust surface concentration and the scattering particle concentration.
+
+# Summary of Findings
+
+Basically, I found that there are no significant correlations between the variables that I would have expected to be correlated. I thought that high dry smoke deposition would be more highly (and positively) correlated with incandescent mass and incandescent particle concentration, and that high dry dust deposition would be strongly, positively correlated with scattering particle concentration. They all had weak to moderate, non-significant correlations.
+
+From the plots of smoke deposition and the incandescent variables, it looks like there might be a bit of a lag between high smoke deposition and high concentrations/masses of incandescent particles. I am not sure if this makes sense, though. Maybe the airmass is hanging out around the SP2 and is not detected until a day or two after the highest deposition? Maybe this has something to do with the modeled NAAPS data or the fact that I upscaled the minutely SP2 data to be daily in order to match the temporal resolution of NAAPS...
+
+The dates of highest dry smoke deposition were:
+
+- August 12 & 13
+
+- August 22 & 23
+
+- August 26
+
+I could run back trajectories for these days and see where those airmasses were coming from since we know that there was substantial smoke deposition then.
+
+
+
+
+

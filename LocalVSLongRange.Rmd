@@ -1,0 +1,1001 @@
+---
+author: "Ella Hall"
+date: "`r Sys.Date()`"
+title: "High NAAPS Deposition vs. High SP2 Observations"
+output: 
+  html_document:
+    code_folding: hide
+    theme: simplex
+    toc: yes
+    toc_float: 
+      collapsed: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 10,      # Set default plot width
+  fig.height = 6,     # Set default plot height
+  fig.align = "center" # Align plots to the center
+)
+```
+
+# Goals of Analysis
+
+The goals here are to:
+
+1. Find high concentration periods from the NAAPS dataset (specifically smoke).
+
+2. Find high concentration periods in the SP2 dataset for incandescent mass, particle concentration, total mass, and scattering particle concentration
+
+3. See how well the dates line up
+
+4. Using the SP2 dataset, see what wind direction most high concentration days are coming from
+
+5. Use this to find some days that represent long-range transport and some that represent local contamination
+
+
+# Load the Data
+
+**Packages**
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(PNWColors)
+library(stringr)
+library(purrr)
+library(patchwork)
+```
+
+**Data**
+
+*All SP2 Stats -- minutely*
+
+```{r}
+AllStats <- read.csv("All_SP2_Statistics_Seconds.csv")
+  # Drop NA rows
+  AllStats <- na.omit(AllStats)
+
+# split the `Date_Time` column to just have the date
+AllStats <- AllStats %>%
+  separate(Date_Time, into = c("Date", "Time_Min"), sep = " ")
+head(AllStats)
+
+# Clean up date format
+AllStats$Date <- as.Date(as.character(AllStats$Date), format = "%Y%m%d")
+```
+*SP2 and Flight Log merged*
+
+```{r}
+SP2_FlightLogMerged <- read.csv("SP2_FlightLogMerged.csv")
+SP2_FlightLogMerged$Date <- as.Date(SP2_FlightLogMerged$Date)
+```
+
+**All SP2 Stats - DAILY**
+```{r}
+DailySP2 <- SP2_FlightLogMerged %>%
+mutate(
+    DateTime = as.POSIXct(paste(Date, Time_Min), format = "%Y-%m-%d %H:%M:%S"))
+```
+
+Then, compute daily averages for the following variables:
+
+- Average incandescent particle concentration (# / cm^3)
+
+- Average incandescent mass concentration (ng / m^3)
+
+- Average total mass (fg) (femtograms)
+
+- Scattering particle concentration (#/cm^3)
+
+```{r}
+DailySP2Vars <- DailySP2 %>%
+  group_by(Date) %>%
+  summarize(
+    DailyIncandParticle = mean(IncandParticleConc, na.rm = TRUE),
+    DailyIncandMass = mean(IncandMassConc, na.rm = TRUE),
+    DailyTotMass = mean(TotalMass, na.rm = TRUE),
+    DailyScatteringParticle = mean(ScatteringParticleConc, na.rm = TRUE),
+    DailyCoatingTotal = mean(coatingTotal, na.rm = TRUE),
+    DailyCoatingMode = mean(coatingModeEOD),
+    AvgWindDirection = mean(ambWD, na.rm = TRUE))
+
+# convert to date format
+DailySP2Vars$Date <- as.Date(DailySP2Vars$Date)
+```
+
+
+*Flight Log*
+
+```{r}
+FlightLog <- read.csv("FlightData_Cleaned.csv")
+```
+
+
+*NAAPS Data*
+
+```{r}
+Pituffik_NAAPS <- read.csv("Pituffik_SP2_NAAPS_Data.csv")
+# Clean up date format
+Pituffik_NAAPS$Date <- as.Date(Pituffik_NAAPS$Date)
+
+Pituffik_SurfConc <- read.csv("PituffikSurfaceConcentrations_SP2.csv")
+Pituffik_SurfConc$Date <- as.Date(Pituffik_SurfConc$Date)
+```
+
+**NAAPS, SP2 Merged**
+```{r}
+NAAPS_SP2_Merged <- DailySP2Vars %>%
+  inner_join(Pituffik_SurfConc, by = "Date")
+```
+
+# Find high smoke concentration periods from the NAAPS dataset
+
+I want to find some time periods when the NAAPS smoke deposition was especially high. Previously, I identified high days as being above the median, so I will stick with that.
+
+```{r}
+ggplot(NAAPS_SP2_Merged, aes(x = Date, y = smoke_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "coral2") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Smoke Surface Concentration over Time",
+    x = "Date",
+    y = "Deposition (ug/m3/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+```{r}
+hist(NAAPS_SP2_Merged$smoke_conc_sfc)
+```
+
+
+```{r}
+MedianSmokeSfcConc <- median(NAAPS_SP2_Merged$smoke_conc_sfc)
+```
+
+I will flag days that higher-than-average deposition:
+
+```{r}
+HighSmoke <- NAAPS_SP2_Merged %>%
+  mutate(
+    HighSmoke = smoke_conc_sfc > MedianSmokeSfcConc
+  )
+```
+
+And plot to see when above-average deposition is happening.
+```{r}
+ggplot(HighSmoke, aes(x = Date, y = smoke_conc_sfc, fill = HighSmoke)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = c("FALSE" = "cadetblue", "TRUE" = "coral2"), 
+    labels = c("Below Median", "Above Median")
+  ) +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Smoke Surface Concentration over Time",
+    x = "Date",
+    y = "Deposition (ug/m3/day)",
+    fill = "Deposition Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Then, I will make a dataset that only includes high deposition days and low deposition days.
+```{r}
+HighSmokeDays <- HighSmoke %>%
+  filter(HighSmoke == TRUE)
+
+LowSmokeDays <- HighSmoke %>%
+  filter(HighSmoke == FALSE)
+```
+
+## Long-Range Transport Days
+
+I can filter the high smoke days by wind direction to see when smoke might have been coming from Canada.
+
+```{r}
+HighSmokeDays <- HighSmokeDays %>%
+  mutate(WindSector = cut(AvgWindDirection, 
+                          breaks = seq(0, 360, by = 45), 
+                          labels = c("N","NE","E","SE","S","SW","W","NW"),
+                          include.lowest = TRUE))
+```
+
+I will filter the high smoke days where the wind was coming from the West, South, Southwest, or Southeast since that could be indicative of long-range transport from Canada.
+```{r}
+LongRange_HighSmoke <- HighSmokeDays %>%
+  filter(WindSector %in% c("W", "SW", "S", "SE"))
+```
+
+There were 36 days when the smoke deposition was high and the wind was coming from the S, SW, SE or W.
+
+## Local Contamination Days
+
+I will filter out local contamination as days when smoke deposition was low and the incandescent particle concentration was high and the wind was coming from the North, NE, NW, or W since that's where the base was in relation to the SP2 and where the power plant was as well.
+
+First, I need to calculate what constitutes a "high incandescent particle concentration." The distribution is pretty skewed again, so I will use the median.
+```{r}
+Local_LowSmoke <- LowSmokeDays %>%
+  filter(DailyIncandParticle >= median(DailyIncandParticle)) 
+```
+
+## Mixed Days
+
+"Mixed" days are when smoke deposition was high but the wind was coming from the N, NW or NE, which may mean that the wind was blowing rBC from the power plant North of the SP2 location. There were 9 days in a row when the wind was coming from the North. 8/19 - 8/27.
+```{r}
+MixedDays <- HighSmokeDays %>%
+  filter(WindSector %in% c("N", "NW", "NE"))
+```
+
+
+# Compare Local vs. Long-Range vs. Mixed 
+
+## Plot
+
+Plot them all together to see when they were occurring:
+```{r}
+# First, create vectors of dates for each category
+LongRangeDays <- LongRange_HighSmoke$Date
+LocalDays     <- Local_LowSmoke$Date
+MixedDaysVec  <- MixedDays$Date
+```
+
+```{r}
+# Add a new categorical variable to the full dataset
+NAAPS_SP2_Merged_Classified <- NAAPS_SP2_Merged %>%
+  mutate(
+    TransportType = case_when(
+      Date %in% LongRangeDays ~ "Long-range",
+      Date %in% LocalDays     ~ "Local",
+      Date %in% MixedDaysVec  ~ "Mixed",
+      TRUE                    ~ "Other"
+    )
+  )
+```
+
+```{r}
+ggplot(NAAPS_SP2_Merged_Classified, aes(x = Date, y = smoke_conc_sfc, fill = TransportType)) +
+  geom_col() +
+  scale_fill_manual(
+    values = c("Long-range" = "indianred3",
+               "Local" = "cadetblue",
+               "Mixed" = "plum4",
+               "Other" = "gray80"),
+    name = "Transport Type"
+  ) +
+  labs(
+    title = "Daily Smoke Surface Concentration by Transport Type",
+    y = "Smoke Surface Concentration (µg/m3)",
+    x = "Date"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+# For convenience, name the deposition variable you want to rank by:
+dep_var <- "DailyIncandParticle"   # change to smoke_totsink, etc.
+
+# Highest Long-range day
+Highest_Local <- NAAPS_SP2_Merged_Classified %>%
+  filter(TransportType == "Local") %>%
+  filter(.data[[dep_var]] == max(.data[[dep_var]], na.rm = TRUE))
+
+Highest_Local
+```
+
+## Boxplots
+
+**Incandescent Particle Concentration**
+```{r}
+# Find the overall range of both datasets
+common_range_IncandParticle <- range(c(Local_LowSmoke$DailyIncandParticle,
+                        LongRange_HighSmoke$DailyIncandParticle),
+                      na.rm = TRUE)
+
+# Set up two side-by-side plots
+par(mfrow = c(1, 3))  # 1 row, 2 columns
+
+# Use the same y-axis limits for both
+boxplot(Local_LowSmoke$DailyIncandParticle,
+        main = "Local Contamination",
+        ylab = "Incand. Particle Concentration",
+        ylim = common_range_IncandParticle)
+
+boxplot(LongRange_HighSmoke$DailyIncandParticle,
+        main = "Long Range Transport",
+        ylab = "Incand. Particle Concentration",
+        ylim = common_range_IncandParticle)
+
+boxplot(MixedDays$DailyIncandParticle,
+        main = "Mixed Transport",
+        ylab = "Incand. Particle Concentration",
+        ylim = common_range_IncandParticle)
+```
+
+**Incandescent Mass Concentration**
+```{r}
+# Find the overall range of both datasets
+common_range_IncandMass <- range(c(Local_LowSmoke$DailyIncandMass,
+                        LongRange_HighSmoke$DailyIncandMass),
+                      na.rm = TRUE)
+
+# Set up two side-by-side plots
+par(mfrow = c(1, 3))  # 1 row, 2 columns
+
+# Use the same y-axis limits for both
+boxplot(Local_LowSmoke$DailyIncandMass,
+        main = "Local Contamination",
+        ylab = "Incand. Mass Concentration",
+        ylim = common_range_IncandMass)
+
+boxplot(LongRange_HighSmoke$DailyIncandMass,
+        main = "Long Range Transport",
+        ylab = "Incand. Mass Concentration",
+        ylim = common_range_IncandMass)
+
+
+boxplot(MixedDays$DailyIncandMass,
+        main = "Mixed Transport",
+        ylab = "Incand. Mass Concentration",
+        ylim = common_range_IncandMass)
+```
+
+**Scattering Particle Concentration**
+```{r}
+# Find the overall range of both datasets
+common_range_ScattPart <- range(c(Local_LowSmoke$DailyScatteringParticle,
+                        LongRange_HighSmoke$DailyScatteringParticle),
+                      na.rm = TRUE)
+
+# Set up two side-by-side plots
+par(mfrow = c(1, 3))  # 1 row, 2 columns
+
+# Use the same y-axis limits for both
+boxplot(Local_LowSmoke$DailyScatteringParticle,
+        main = "Local Contamination",
+        ylab = "Scat. Part. Concentration",
+        ylim = common_range_ScattPart)
+
+boxplot(LongRange_HighSmoke$DailyScatteringParticle,
+        main = "Long Range Transport",
+        ylab = "Scat. Part. Concentration",
+        ylim = common_range_ScattPart)
+
+boxplot(MixedDays$DailyScatteringParticle,
+        main = "Mixed Transport",
+        ylab = "Scat. Part. Concentration",
+        ylim = common_range_ScattPart)
+```
+
+**Total Mass**
+```{r}
+# Find the overall range of both datasets
+common_range_TotalMass <- range(c(Local_LowSmoke$DailyTotMass,
+                        LongRange_HighSmoke$DailyTotMass),
+                      na.rm = TRUE)
+
+# Set up two side-by-side plots
+par(mfrow = c(1, 3))  # 1 row, 2 columns
+
+# Use the same y-axis limits for both
+boxplot(Local_LowSmoke$DailyTotMass,
+        main = "Local Contamination",
+        ylab = "Total Mass Concentration",
+        ylim = common_range_TotalMass)
+
+boxplot(LongRange_HighSmoke$DailyTotMass,
+        main = "Long Range Transport",
+        ylab = "Total Mass Concentration",
+        ylim = common_range_TotalMass)
+
+boxplot(MixedDays$DailyTotMass,
+        main = "Long Range Transport",
+        ylab = "Mixed Concentration",
+        ylim = common_range_TotalMass)
+```
+
+**Coating Total**
+```{r}
+# Find the overall range of both datasets
+common_range_CoatTot <- range(c(Local_LowSmoke$DailyCoatingTotal,
+                        LongRange_HighSmoke$DailyCoatingTotal),
+                      na.rm = TRUE)
+
+# Set up two side-by-side plots
+par(mfrow = c(1, 3))  # 1 row, 2 columns
+
+# Use the same y-axis limits for both
+boxplot(Local_LowSmoke$DailyCoatingTotal,
+        main = "Local Contamination",
+        ylab = "Coating Total",
+        ylim = common_range_CoatTot)
+
+boxplot(LongRange_HighSmoke$DailyCoatingTotal,
+        main = "Long Range Transport",
+        ylab = "Coating Total",
+        ylim = common_range_CoatTot)
+
+boxplot(MixedDays$DailyCoatingTotal,
+        main = "Mixed Transport",
+        ylab = "Coating Total",
+        ylim = common_range_CoatTot)
+```
+
+**Equivalent Coating Thickness**
+
+```{r}
+# Find the overall range of both datasets
+common_range_ECT <- range(c(Local_LowSmoke$DailyCoatingMode,
+                        LongRange_HighSmoke$DailyCoatingMode),
+                      na.rm = TRUE)
+
+# Set up two side-by-side plots
+par(mfrow = c(1, 3))  # 1 row, 2 columns
+
+# Use the same y-axis limits for both
+boxplot(Local_LowSmoke$DailyCoatingMode,
+        main = "Local Contamination",
+        ylab = "Equiv. Coat. Thickness",
+        ylim = common_range_ECT)
+
+boxplot(LongRange_HighSmoke$DailyCoatingMode,
+        main = "Long Range Transport",
+        ylab = "Equiv. Coat. Thickness",
+        ylim = common_range_ECT)
+
+boxplot(MixedDays$DailyCoatingMode,
+        main = "Mixed Transport",
+        ylab = "Equiv. Coat. Thickness",
+        ylim = common_range_ECT)
+```
+
+## Summary Stats Table
+
+```{r}
+library(gt)
+NAAPS_SP2_Merged_Classified %>%
+  group_by(TransportType) %>%
+  summarise(
+    mean_IncandParticle = mean(DailyIncandParticle, na.rm = TRUE),
+    se_IncandParticle   = sd(DailyIncandParticle, na.rm = TRUE) / sqrt(sum(!is.na(DailyIncandParticle))),
+    
+    mean_IncandMass = mean(DailyIncandMass, na.rm = TRUE),
+    se_IncandMass   = sd(DailyIncandMass, na.rm = TRUE) / sqrt(sum(!is.na(DailyIncandMass))),
+    
+    mean_ScatParticle = mean(DailyScatteringParticle, na.rm = TRUE),
+    se_ScatParticle   = sd(DailyScatteringParticle, na.rm = TRUE) / sqrt(sum(!is.na(DailyScatteringParticle))),
+    
+    mean_TotMass = mean(DailyTotMass, na.rm = TRUE),
+    se_TotMass   = sd(DailyTotMass, na.rm = TRUE) / sqrt(sum(!is.na(DailyTotMass))),
+    
+    mean_CoatingECT = mean(DailyCoatingMode, na.rm = TRUE),
+    se_CoatingECT   = sd(DailyCoatingMode, na.rm = TRUE) / sqrt(sum(!is.na(DailyCoatingMode))),
+    
+    mean_CoatingTotal = mean(DailyCoatingTotal, na.rm = TRUE),
+    se_CoatingTotal   = sd(DailyCoatingTotal, na.rm = TRUE) / sqrt(sum(!is.na(DailyCoatingTotal)))
+  ) %>%
+  
+  # format into a nice table
+    gt() %>%
+  tab_header(
+    title = "Summary Stats: Transport Type") %>%
+  fmt_number(
+    columns = where(is.numeric), decimals = 2
+  )
+```
+
+
+### Table of Local, Long Range and Mixed Dates
+
+```{r}
+NAAPS_SP2_Merged_Classified %>%
+  group_by(TransportType) %>%
+  summarise(Dates = paste(format(Date, "%Y-%m-%d"), collapse = "<br>")) %>%
+  gt() %>%
+  tab_header(title = "Dates by Transport Type") %>%
+  fmt_markdown(columns = Dates) %>%
+  cols_label(
+    TransportType = "Transport Type",
+    Dates = "Dates"
+  )
+```
+
+
+
+
+
+
+
+
+
+# ##################################
+# 2. Find high concentration periods in the SP2 dataset {.tabset}
+
+## Incandescent Mass {.tabset}
+
+```{r}
+ggplot(NAAPS_SP2_Merged, aes(x = Date, y = DailyIncandMass)) +
+  geom_bar(stat = "identity", fill = "hotpink4") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Daily Incandescent Mass Concentration over Time",
+    x = "Date",
+    y = "(ng/m3))"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+```{r}
+AverageIncandMass <- mean(NAAPS_SP2_Merged$DailyIncandMass)
+```
+
+I will flag days that higher-than-average incandescent mass concentration:
+
+```{r}
+AboveAverageIncandMass <- NAAPS_SP2_Merged %>%
+  mutate(
+    HighIncandMassConc = DailyIncandMass > AverageIncandMass
+  )
+```
+
+And plot to see when above-average deposition is happening.
+```{r}
+ggplot(AboveAverageIncandMass, aes(x = Date, y = DailyIncandMass, fill = HighIncandMassConc)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = c("FALSE" = "hotpink4", "TRUE" = "coral2"),  # normal vs above-average
+    labels = c("Average", "Above Average")
+  ) +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Incandescent Mass Concentration over Time",
+    x = "Date",
+    y = "(ng/m3)",
+    fill = "Incand Mass Conc."
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Then, I will make a dataset that only includes high deposition days and low deposition days.
+```{r}
+HighIncandMass <- AboveAverageIncandMass %>%
+  filter(HighIncandMassConc == TRUE)
+
+LowIncandMass <- AboveAverageIncandMass %>%
+  filter(HighIncandMassConc == FALSE)
+```
+
+## Incandescent Particle Concentration {.tabset}
+
+```{r}
+ggplot(NAAPS_SP2_Merged, aes(x = Date, y = DailyIncandParticle)) +
+  geom_bar(stat = "identity", fill = "darkolivegreen3") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Daily Incandescent Particle Concentration over Time",
+    x = "Date",
+    y = "(#/cm3))"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+```{r}
+AverageIncandParticle <- mean(NAAPS_SP2_Merged$DailyIncandParticle)
+```
+
+I will flag days that higher-than-average incandescent Particle concentration:
+
+```{r}
+AboveAverageIncandParticle <- NAAPS_SP2_Merged %>%
+  mutate(
+    HighIncandParticleConc = DailyIncandParticle > AverageIncandParticle
+  )
+```
+
+And plot to see when above-average deposition is happening.
+```{r}
+ggplot(AboveAverageIncandParticle, aes(x = Date, y = DailyIncandParticle, fill = HighIncandParticleConc)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = c("FALSE" = "darkolivegreen3", "TRUE" = "coral2"),  # normal vs above-average
+    labels = c("Average", "Above Average")
+  ) +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Incandescent Particle Concentration over Time",
+    x = "Date",
+    y = "(#/cm3)",
+    fill = "Incand Particle Conc."
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Then, I will make a dataset that only includes high deposition days and low deposition days.
+```{r}
+HighIncandParticle <- AboveAverageIncandParticle %>%
+  filter(HighIncandParticleConc == TRUE)
+
+LowIncandParticle <- AboveAverageIncandParticle %>%
+  filter(HighIncandParticleConc == FALSE)
+```
+
+## Total Mass {.tabset}
+
+```{r}
+ggplot(NAAPS_SP2_Merged, aes(x = Date, y = DailyTotMass)) +
+  geom_bar(stat = "identity", fill = "tan2") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Daily Total Mass Concentration over Time",
+    x = "Date",
+    y = "(fg))"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+```{r}
+AverageTotMass <- mean(NAAPS_SP2_Merged$DailyTotMass)
+```
+
+I will flag days that higher-than-average Totescent mass concentration:
+
+```{r}
+AboveAverageTotMass <- NAAPS_SP2_Merged %>%
+  mutate(
+    HighTotMassConc = DailyTotMass > AverageTotMass
+  )
+```
+
+And plot to see when above-average deposition is happening.
+```{r}
+ggplot(AboveAverageTotMass, aes(x = Date, y = DailyTotMass, fill = HighTotMassConc)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = c("FALSE" = "tan2", "TRUE" = "coral2"),  # normal vs above-average
+    labels = c("Average", "Above Average")
+  ) +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Total Mass Concentration over Time",
+    x = "Date",
+    y = "(fg)",
+    fill = "Tot Mass Conc."
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Then, I will make a dataset that only includes high deposition days and low deposition days.
+```{r}
+HighTotMass <- AboveAverageTotMass %>%
+  filter(HighTotMassConc == TRUE)
+
+LowTotMass <- AboveAverageTotMass %>%
+  filter(HighTotMassConc == FALSE)
+```
+
+## Scattering Particle Concentration {.tabset}
+
+```{r}
+ggplot(NAAPS_SP2_Merged, aes(x = Date, y = DailyScatteringParticle)) +
+  geom_bar(stat = "identity", fill = "mediumpurple2") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Daily Scattering Particle Concentration over Time",
+    x = "Date",
+    y = "(#/cm3))"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+```{r}
+AverageScatteringParticle <- mean(NAAPS_SP2_Merged$DailyScatteringParticle)
+```
+
+I will flag days that higher-than-average Scattering Particle concentration:
+
+```{r}
+AboveAverageScatteringParticle <- NAAPS_SP2_Merged %>%
+  mutate(
+    HighScatteringParticleConc = DailyScatteringParticle > AverageScatteringParticle
+  )
+```
+
+And plot to see when above-average deposition is happening.
+```{r}
+ggplot(AboveAverageScatteringParticle, aes(x = Date, y = DailyScatteringParticle, fill = HighScatteringParticleConc)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = c("FALSE" = "mediumpurple2", "TRUE" = "coral2"),  # normal vs above-average
+    labels = c("Average", "Above Average")
+  ) +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Scattering Particle Concentration over Time",
+    x = "Date",
+    y = "(#/cm3)",
+    fill = "Scattering Particle Conc."
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Then, I will make a dataset that only includes high deposition days and low deposition days.
+```{r}
+HighScatteringParticle <- AboveAverageScatteringParticle %>%
+  filter(HighScatteringParticleConc == TRUE)
+
+LowScatteringParticle <- AboveAverageScatteringParticle %>%
+  filter(HighScatteringParticleConc == FALSE)
+```
+
+# 3. See how well the dates line up {.tabset}
+
+I want to compare the high NAAPS data to the high SP2 data to see how well they are correlated.
+
+## Incandescent Mass Concentration {.tabset}
+
+```{r}
+HighIncandMass <- HighSmokeDays %>%
+  mutate(OverlapWithSmoke = Date %in% HighIncandMass$Date)
+```
+
+
+```{r}
+sum(HighIncandMass$OverlapWithSmoke == TRUE)
+```
+
+There were 8 days where both were high.
+
+
+```{r}
+ggplot(HighIncandMass, aes(x = Date, y = DailyIncandMass, fill = OverlapWithSmoke)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = c("FALSE" = "mediumpurple2", "TRUE" = "red4"),  # normal vs above-average
+    labels = c("No Overlap", "Overlap")
+  ) +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Days That Incand Mass and Smoke Overlap",
+    x = "Date",
+    y = "Incandescent mass concentration (ng/m3)",
+    fill = "Incandescent Mass Concentration"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+The highest incandescent mass concentrations do overlap with high smoke days! This is what I would expect!
+
+## Incandescent Particle Concentration {.tabset}
+
+```{r}
+HighIncandParticle <- HighSmokeDays %>%
+  mutate(OverlapWithSmoke = Date %in% HighIncandParticle$Date)
+```
+
+
+```{r}
+sum(HighIncandParticle$OverlapWithSmoke == TRUE)
+```
+
+There were 6 days where both were high.
+
+
+```{r}
+ggplot(HighIncandParticle, aes(x = Date, y = DailyIncandParticle, fill = OverlapWithSmoke)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = c("FALSE" = "darkolivegreen3", "TRUE" = "red4"),  # normal vs above-average
+    labels = c("No Overlap", "Overlap")
+  ) +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Days That Incand Particle and Smoke Overlap",
+    x = "Date",
+    y = "Incandescent Particle concentration (#/cm3)",
+    fill = "Incandescent Particle Concentration"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+The highest incandescent Particle concentrations do overlap with high smoke days! This is what I would expect!
+
+
+## Total Mass Concentration {.tabset}
+
+```{r}
+HighTotalMass <- HighSmokeDays %>%
+  mutate(OverlapWithSmoke = Date %in% HighTotMass$Date)
+```
+
+
+```{r}
+sum(HighTotalMass$OverlapWithSmoke == TRUE)
+```
+
+There were 7 days where both were high.
+
+
+```{r}
+ggplot(HighTotalMass, aes(x = Date, y = DailyTotMass, fill = OverlapWithSmoke)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = c("FALSE" = "tan2", "TRUE" = "red4"),  # normal vs above-average
+    labels = c("No Overlap", "Overlap")
+  ) +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Days That Total Mass and Smoke Overlap",
+    x = "Date",
+    y = "Total mass (fg)",
+    fill = "Total Mass"
+  ) +
+  theme_minimal() +
+   theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Again, the highest days overlap! There were 7 overlapping days.
+
+
+# 4. Average Wind Direction for High Smoke Days
+
+I want to figure out the average wind direction for high smoke days.
+```{r}
+HighSmokeDays <- HighSmokeDays %>%
+  mutate(WindSector = cut(AvgWindDirection, 
+                          breaks = seq(0, 360, by = 45), 
+                          labels = c("N","NE","E","SE","S","SW","W","NW"),
+                          include.lowest = TRUE))
+
+table(HighSmokeDays$WindSector)
+```
+
+It looks like most of the high smoke days have wind coming from the Southeast. This could be indicative of smoke transport. SW has 5, which is more likely smoke transport. Then, 7 days were coming from the North, so this was likely local contamination.
+
+# 5. Average Wind Direction for High Incandescent Particle Days
+
+```{r}
+HighIncandPartDays <- HighIncandParticle %>%
+  mutate(WindSector = cut(AvgWindDirection, 
+                          breaks = seq(0, 360, by = 45), 
+                          labels = c("N","NE","E","SE","S","SW","W","NW"),
+                          include.lowest = TRUE))
+
+table(HighIncandPartDays$WindSector)
+```
+
+These look the same as high smoke days...
+
+# 5. Local vs. Long-Range Transport
+
+I am assuming that high smoke days where the wind was coming from the North were local contamination. Days where the wind was coming from the Southeast, South and Southwest are indicative of long-range smoke transport. I will separate these out into two datasets so I can comapre them.
+
+```{r}
+LongRangeTransport <- HighSmokeDays %>%
+  filter(WindSector%in% c("S", "SE", "SW"))
+```
+
+```{r}
+LocalContamination <- HighIncandPartDays %>%
+  filter(WindSector == "N")
+```
+
+## Compare Attributes
+
+I will compare how the data looks between local and long-range transport. Specifically, the coating thickness.
+
+```{r}
+summary(LocalContamination$DailyCoatingTotal)
+```
+
+```{r}
+summary(LongRangeTransport$DailyCoatingTotal)
+```
+
+```{r}
+par(mfrow = c(1, 2))  # 1 row, 2 columns
+
+boxplot(LocalContamination$DailyCoatingTotal,
+        main = "Local",
+        ylab = "Daily Coating Total")
+
+boxplot(LongRangeTransport$DailyCoatingTotal,
+        main = "Long Range",
+        ylab = "Daily Coating Total",
+        ylim = range(c(LocalContamination$DailyCoatingTotal,
+                       LongRangeTransport$DailyCoatingTotal), na.rm = TRUE))
+```
+
+
+The median coating total for local contamination is MUCH lower!! This makes sense since during long-range transport, the particles are picking up more "stuff"
+
+```{r}
+summary(LocalContamination$DailyCoatingMode)
+```
+
+```{r}
+summary(LongRangeTransport$DailyCoatingMode)
+```
+
+```{r}
+par(mfrow = c(1, 2))  # 1 row, 2 columns
+
+boxplot(LocalContamination$DailyCoatingMode,
+        main = "Local",
+        ylab = "Daily Coating Mode")
+
+boxplot(LongRangeTransport$DailyCoatingMode,
+        main = "Long Range",
+        ylab = "Daily Coating Mode",
+        ylim = range(c(LocalContamination$DailyCoatingMode,
+                       LongRangeTransport$DailyCoatingMode), na.rm = TRUE))
+```
+
+The coating mode (equivalent coating thickness) shows less variability for local transport compared to long-range. The mean and median are lower for local contamination, though. Larger coating = more aged, which makes sense with the long-range particles having a larger ECT.
+
+# 6. Long-Range Transport Case Study
+
+**August 15th was the highest concentration for all incandescent SP2 variables!**
+
+The average wind direction during that day was: 193.6292. This means that the wind was coming from the South-Southwest, which could be indicative of long-range smoke transport.
+
+The smoke surface concentration was: 0.219. The incandescent particle concentration was 44.87 particles/ cm3. 
+
+**The highest smoke surface concentration was on 8/13, though. 1.95 ug/m3.**
+
+# 7. Local Contamination Case Study
+
+The wind was coming from the North on 8/23/2024 and the incandescent SP2 variables were highest then out of the subset with wind coming from the north. 
+
+
+```{r}
+LongRangeCaseStudy <- LongRangeTransport %>%
+  filter(Date == "2024-08-15")
+```
+
+```{r}
+LocalContamCaseStudy <- LocalContamination %>%
+  filter(Date == "2024-08-23")
+```
+
+
+```{r}
+LongRange_LocalComparison <- bind_rows(
+  LongRangeCaseStudy,
+  LocalContamCaseStudy
+)
+
+LongRange_LocalComparison
+```
+- The incandescent particle concentration is higher in the long-range transport day
+
+- The incandescent mass is also higher in the long-range transport day
+
+- The total mass is also higher in the long-range transport day
+
+- The scattering particle concentration is also higher in the long-range day
+
+- The coating total is higher in the long-range, but the coating total (ECT) is higher in the local contamination day?
+
+

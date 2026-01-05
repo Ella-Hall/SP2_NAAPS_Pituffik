@@ -1,0 +1,1222 @@
+---
+author: "Ella Hall"
+date: "`r Sys.Date()`"
+title: "NAAPS / SP2 Comparison"
+output: 
+  html_document:
+    code_folding: hide
+    theme: simplex
+    toc: yes
+    toc_float: 
+      collapsed: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 10,      # Set default plot width
+  fig.height = 6,     # Set default plot height
+  fig.align = "center" # Align plots to the center
+)
+```
+
+# Goals of Analysis
+
+In this script I will:
+
+- Find times with high NAAPS smoke surface concentrations, and run summary stats on the SP2 variables for high vs. low smoke concentration time periods
+
+- Find times with high NAAPS dust surface concentrations, and run summary stats on the SP2 variables for high vs. low smoke concentration time periods
+
+- Find times with high NAAPS ABF surface concentrations, and run summary stats on the SP2 variables for high vs. low smoke concentration time periods
+
+# Load the Data
+
+**Packages**
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(PNWColors)
+library(stringr)
+library(purrr)
+library(patchwork)
+library(gt)
+```
+
+**Data**
+
+*All SP2 Stats -- minutely*
+
+```{r}
+AllStats <- read.csv("All_SP2_Statistics_Seconds.csv")
+  # Drop NA rows
+  AllStats <- na.omit(AllStats)
+
+# split the `Date_Time` column to just have the date
+AllStats <- AllStats %>%
+  separate(Date_Time, into = c("Date", "Time_Min"), sep = " ")
+head(AllStats)
+
+# Clean up date format
+AllStats$Date <- as.Date(as.character(AllStats$Date), format = "%Y%m%d")
+```
+
+*Flight Log*
+
+```{r}
+FlightLog <- read.csv("FlightData_Cleaned.csv")
+```
+
+*SP2 and Flight Log merged*
+
+```{r}
+SP2_FlightLogMerged <- read.csv("SP2_FlightLogMerged.csv")
+```
+
+*NAAPS Data*
+
+```{r}
+Pituffik_NAAPS <- read.csv("Pituffik_SP2_NAAPS_Data.csv")
+# Clean up date format
+Pituffik_NAAPS$Date <- as.Date(Pituffik_NAAPS$Date)
+
+Pituffik_SurfConc <- read.csv("PituffikSurfaceConcentrations_SP2.csv")
+Pituffik_SurfConc$Date <- as.Date(Pituffik_SurfConc$Date)
+```
+
+# NAAPS Data Exploration {.tabset}
+
+I will start by plotting smoke, dust and ABF over the time period of the dataset to get an idea of when there may have been high deposition events. I will identify time periods when there were elevated concentrations 
+
+## Smoke {.tabset}
+
+```{r}
+ggplot(Pituffik_SurfConc, aes(x = Date, y = smoke_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "coral2") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Smoke Surface Concentration over Time",
+    x = "Date",
+    y = "Surface Concentration (mg/m2/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+It looks like smoke surface concentrations were highest in the second half of the study period. The highest smoke events were August 11 and 12th.
+
+```{r}
+summary(Pituffik_SurfConc$smoke_conc_sfc)
+sd(Pituffik_SurfConc$smoke_conc_sfc)
+```
+
+
+I will use the median value as the threshold to flag time periods of events that are higher than that value.
+```{r}
+# Calculate threshold based on the median
+Pituffik_SurfConc <- Pituffik_SurfConc %>%
+  mutate(
+    SmokeThreshold = median(smoke_conc_sfc),
+    SmokeEvent = smoke_conc_sfc >= SmokeThreshold  # Identify exceedance
+  ) %>%
+  ungroup()
+```
+
+
+I just want to visually check that the baseline threshold is looking how I would expect for each year.
+```{r}
+# If you want a single global threshold (not per year)
+smoke_threshold_value <- median(Pituffik_SurfConc$smoke_conc_sfc)
+
+ggplot(Pituffik_SurfConc, aes(x = Date, y = smoke_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "coral2") +
+  geom_hline(yintercept = smoke_threshold_value, color = "blue", linetype = "dashed") +
+  labs(
+    title = "Smoke Concentration",
+    subtitle = paste("Median Value =", round(smoke_threshold_value, 2)),
+    y = "Surface Concentration",
+    x = "Date"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+SmokePlot <- ggplot(Pituffik_SurfConc, aes(x = Date, y = smoke_conc_sfc, fill = SmokeEvent)) +
+  geom_col() +
+  geom_line(aes(y = SmokeThreshold), color = "blue", linetype = "dashed") +
+  scale_fill_manual(values = c("FALSE" = "gray70", "TRUE" = "coral2"),
+                    name = "Smoke Amount",
+                    labels = c("Low", "High")) +
+  labs(
+    #title = "Smoke Concentration with Median Threshold",
+    y = "Smoke Surf. Conc. (mg/m2)",
+    x = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+SmokePlot
+```
+
+Smoke events were highest from the end of August to the middle of September. I will use that chunk of time as the time period to explore the SP2 data for. Specifically, 8/12/24 - 9/11/24.
+
+
+## Dust {.tabset}
+
+```{r}
+ggplot(Pituffik_SurfConc, aes(x = Date, y = dust_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "burlywood3") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "Dust Surface Concentration over Time",
+    x = "Date",
+    y = "Surface Concentration (mg/m2/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+Dust concentrations were generally much higher than smoke concentrations. Dust deposition was also generally higher during the later half of the study period. There was a very high dust deposition event on September 23rd.
+
+```{r}
+summary(Pituffik_SurfConc$dust_conc_sfc)
+```
+
+
+I will use the median value as the threshold to flag time periods of events that are higher than that value.
+```{r}
+# Calculate threshold per year
+Pituffik_SurfConc <- Pituffik_SurfConc %>%
+  mutate(
+    DustThreshold = median(dust_conc_sfc),
+    DustEvent = dust_conc_sfc >= DustThreshold  # Identify exceedance
+  ) %>%
+  ungroup()
+```
+
+
+I just want to visually check that the baseline threshold is looking how I would expect for each year.
+```{r}
+# If you want a single global threshold (not per year)
+dust_threshold_value <- with(Pituffik_SurfConc, median(dust_conc_sfc))
+
+ggplot(Pituffik_SurfConc, aes(x = Date, y = dust_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "burlywood3") +
+  geom_hline(yintercept = dust_threshold_value, color = "blue", linetype = "dashed") +
+  labs(
+    title = "Dust Concentration",
+    subtitle = paste("Median Value =", round(dust_threshold_value, 2)),
+    y = "Surface Concentration",
+    x = "Date"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+DustPlot <- ggplot(Pituffik_SurfConc, aes(x = Date, y = dust_conc_sfc, fill = DustEvent)) +
+  geom_col() +
+  geom_line(aes(y = DustThreshold), color = "blue", linetype = "dashed") +
+  scale_fill_manual(values = c("FALSE" = "gray70", "TRUE" = "burlywood3"),
+                    name = "Dust Amount",
+                    labels = c("Low", "High")) +
+  labs(
+    #title = "Dust Concentration with Median Threshold",
+    y = "Dust Surf. Conc. (mg/m2)",
+    x = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+DustPlot
+```
+
+Dust events were highest in September. The longest consecutive grouping of dust events is from 8/26 - 9/13. The highest event was on 9/24, though...
+
+
+## ABF {.tabset}
+
+```{r}
+ggplot(Pituffik_SurfConc, aes(x = Date, y = abf_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "darkseagreen") +
+  scale_x_date(date_breaks = "1 day", date_labels = "%b %d") +
+  labs(
+    title = "ABF Surface Concentration over Time",
+    x = "Date",
+    y = "Surface Concentration (mg/m2/day)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, size = 5))
+```
+
+ABF looks like it follows a more similar pattern to dust than smoke. The highest ABF concentration was also on September 23rd. 
+
+```{r}
+summary(Pituffik_SurfConc$abf_conc_sfc)
+```
+
+
+I will use the median value as the threshold to flag time periods of events that are higher than that value.
+```{r}
+# Calculate threshold per year
+Pituffik_SurfConc <- Pituffik_SurfConc %>%
+  mutate(
+    ABFThreshold = median(abf_conc_sfc),
+    ABFEvent = abf_conc_sfc >= ABFThreshold  # Identify exceedance
+  ) %>%
+  ungroup()
+```
+
+
+I just want to visually check that the baseline threshold is looking how I would expect for each year.
+```{r}
+# If you want a single global threshold (not per year)
+abf_threshold_value <- with(Pituffik_SurfConc, median(abf_conc_sfc))
+
+ggplot(Pituffik_SurfConc, aes(x = Date, y = abf_conc_sfc)) +
+  geom_bar(stat = "identity", fill = "darkseagreen") +
+  geom_hline(yintercept = abf_threshold_value, color = "blue", linetype = "dashed") +
+  labs(
+    title = "ABF Concentration",
+    subtitle = paste("Median Value =", round(abf_threshold_value, 2)),
+    y = "ABF Surface Concentration",
+    x = "Date"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ABFPlot <- ggplot(Pituffik_SurfConc, aes(x = Date, y = abf_conc_sfc, fill = ABFEvent)) +
+  geom_col() +
+  geom_line(aes(y = ABFThreshold), color = "blue", linetype = "dashed") +
+  scale_fill_manual(values = c("FALSE" = "gray70", "TRUE" = "darkseagreen"),
+                    name = "ABF Amount",
+                    labels = c("Low", "High")) +
+  labs(
+    #title = "ABF Concentration with Median Threshold",
+    y = "ABF Surf. Conc. (mg/m2)",
+    x = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ABFPlot
+```
+
+Dust events were highest in September. The longest consecutive grouping of dust events is from 8/31 - 9/25. 
+
+```{r}
+(SmokePlot / DustPlot / ABFPlot)
+```
+
+It looks like smoke, dust and ABF were all highest in the second half of the dataset. Dust and ABF were especially high at the end of the time period. Smoke was elevated between August and September.
+
+
+# SP2 Data Exploration and Summary Stats {.tabset}
+
+The SP2 data is hourly, so I will aggregate it up to a daily resolution to match the NAAPS data for the variables that I am interested in:
+```{r}
+DailySP2 <- SP2_FlightLogMerged %>%
+mutate(
+    DateTime = as.POSIXct(paste(Date, Time_Min), format = "%Y-%m-%d %H:%M:%S"))
+```
+
+```{r}
+DailySP2Vars <- DailySP2 %>%
+  group_by(Date) %>%
+  summarize(
+    DailyIncandParticle = mean(IncandParticleConc, na.rm = TRUE),
+    DailyIncandMass = mean(IncandMassConc, na.rm = TRUE),
+    DailyScatteringConc = mean(ScatteringParticleConc),
+    DailyTotMass = mean(TotalMass, na.rm = TRUE),
+    DailyCoatingECT = mean(coatingModeEOD, na.rm = TRUE),
+    DailyCoatingTotal = mean(coatingTotal))
+
+# convert to date format
+DailySP2Vars$Date <- as.Date(DailySP2Vars$Date)
+```
+
+Then, I will merge this with the NAAPS data:
+```{r}
+DailySP2_NAAPS_Sfc <- left_join(DailySP2Vars, Pituffik_SurfConc, by = c("Date"))
+```
+
+
+Now, I can look at summary stats of each variable during high vs. low events for each deposition type.
+
+# Summary Stats Tables  {.tabset}
+
+## Smoke Events {.tabset}
+
+I will start by looking at summary stats during high vs. low smoke events:
+
+```{r}
+DailySP2_NAAPS_Sfc %>%
+  group_by(SmokeEvent) %>%
+  summarise(
+    mean_IncandParticle = mean(DailyIncandParticle, na.rm = TRUE),
+    se_IncandParticle   = sd(DailyIncandParticle, na.rm = TRUE) / sqrt(sum(!is.na(DailyIncandParticle))),
+    
+    mean_IncandMass = mean(DailyIncandMass, na.rm = TRUE),
+    se_IncandMass   = sd(DailyIncandMass, na.rm = TRUE) / sqrt(sum(!is.na(DailyIncandMass))),
+    
+    mean_ScatParticle = mean(DailyScatteringConc, na.rm = TRUE),
+    se_ScatParticle   = sd(DailyScatteringConc, na.rm = TRUE) / sqrt(sum(!is.na(DailyScatteringConc))),
+    
+    mean_TotMass = mean(DailyTotMass, na.rm = TRUE),
+    se_TotMass   = sd(DailyTotMass, na.rm = TRUE) / sqrt(sum(!is.na(DailyTotMass))),
+    
+    mean_CoatingECT = mean(DailyCoatingECT, na.rm = TRUE),
+    se_CoatingECT   = sd(DailyCoatingECT, na.rm = TRUE) / sqrt(sum(!is.na(DailyCoatingECT))),
+    
+    mean_CoatingTotal = mean(DailyCoatingTotal, na.rm = TRUE),
+    se_CoatingTotal   = sd(DailyCoatingTotal, na.rm = TRUE) / sqrt(sum(!is.na(DailyCoatingTotal)))
+  ) %>%
+  mutate(SmokeEvent = ifelse(SmokeEvent, "High", "Low")) %>%
+  
+  # format into a nice table
+    gt() %>%
+  tab_header(
+    title = "Summary Stats: High vs. Low Smoke Events") %>%
+  fmt_number(
+    columns = where(is.numeric), decimals = 2
+  )
+```
+
+
+## Dust Events {.tabset}
+
+I will start by looking at summary stats during high vs. low dust events:
+
+```{r}
+DailySP2_NAAPS_Sfc %>%
+  group_by(DustEvent) %>%
+  summarise(
+    mean_IncandParticle = mean(DailyIncandParticle, na.rm = TRUE),
+    se_IncandParticle   = sd(DailyIncandParticle, na.rm = TRUE) / sqrt(sum(!is.na(DailyIncandParticle))),
+    
+    mean_IncandMass = mean(DailyIncandMass, na.rm = TRUE),
+    se_IncandMass   = sd(DailyIncandMass, na.rm = TRUE) / sqrt(sum(!is.na(DailyIncandMass))),
+    
+    mean_ScatParticle = mean(DailyScatteringConc, na.rm = TRUE),
+    se_ScatParticle   = sd(DailyScatteringConc, na.rm = TRUE) / sqrt(sum(!is.na(DailyScatteringConc))),
+    
+    mean_TotMass = mean(DailyTotMass, na.rm = TRUE),
+    se_TotMass   = sd(DailyTotMass, na.rm = TRUE) / sqrt(sum(!is.na(DailyTotMass))),
+    
+    mean_CoatingECT = mean(DailyCoatingECT, na.rm = TRUE),
+    se_CoatingECT   = sd(DailyCoatingECT, na.rm = TRUE) / sqrt(sum(!is.na(DailyCoatingECT))),
+    
+    mean_CoatingTotal = mean(DailyCoatingTotal, na.rm = TRUE),
+    se_CoatingTotal   = sd(DailyCoatingTotal, na.rm = TRUE) / sqrt(sum(!is.na(DailyCoatingTotal)))
+  ) %>%
+  mutate(DustEvent = ifelse(DustEvent, "High", "Low")) %>%
+  
+  # format into a nice table
+    gt() %>%
+  tab_header(
+    title = "Summary Stats: High vs. Low Dust Events") %>%
+  fmt_number(
+    columns = where(is.numeric), decimals = 2
+  )
+```
+
+## ABF Events {.tabset}
+
+I will start by looking at summary stats during high vs. low ABF events:
+
+```{r}
+DailySP2_NAAPS_Sfc %>%
+  group_by(ABFEvent) %>%
+  summarise(
+    mean_IncandParticle = mean(DailyIncandParticle, na.rm = TRUE),
+    se_IncandParticle   = sd(DailyIncandParticle, na.rm = TRUE) / sqrt(sum(!is.na(DailyIncandParticle))),
+    
+    mean_IncandMass = mean(DailyIncandMass, na.rm = TRUE),
+    se_IncandMass   = sd(DailyIncandMass, na.rm = TRUE) / sqrt(sum(!is.na(DailyIncandMass))),
+    
+    mean_ScatParticle = mean(DailyScatteringConc, na.rm = TRUE),
+    se_ScatParticle   = sd(DailyScatteringConc, na.rm = TRUE) / sqrt(sum(!is.na(DailyScatteringConc))),
+    
+    mean_TotMass = mean(DailyTotMass, na.rm = TRUE),
+    se_TotMass   = sd(DailyTotMass, na.rm = TRUE) / sqrt(sum(!is.na(DailyTotMass))),
+    
+    mean_CoatingECT = mean(DailyCoatingECT, na.rm = TRUE),
+    se_CoatingECT   = sd(DailyCoatingECT, na.rm = TRUE) / sqrt(sum(!is.na(DailyCoatingECT))),
+    
+    mean_CoatingTotal = mean(DailyCoatingTotal, na.rm = TRUE),
+    se_CoatingTotal   = sd(DailyCoatingTotal, na.rm = TRUE) / sqrt(sum(!is.na(DailyCoatingTotal)))
+  ) %>%
+  mutate(ABFEvent = ifelse(ABFEvent, "High", "Low")) %>%
+  
+  # format into a nice table
+    gt() %>%
+  tab_header(
+    title = "Summary Stats: High vs. Low ABF Events") %>%
+  fmt_number(
+    columns = where(is.numeric), decimals = 2
+  )
+```
+
+
+# Summary Stats {.tabset}
+
+I will organize the SP2 by NAAPS separation. High and low smoke, high and low dust, high and low ABF.
+
+## Smoke {.tabset}
+
+*High smoke times*
+```{r}
+HighSmoke_SP2 <- DailySP2_NAAPS_Sfc %>%
+  filter(SmokeEvent == TRUE)
+```
+
+*Low smoke times*
+```{r}
+LowSmoke_SP2 <- DailySP2_NAAPS_Sfc %>%
+  filter(SmokeEvent == FALSE)
+```
+
+Then I will plot the four variables of interest during high and low smoke events:
+*Incandescent particle concentration*
+```{r}
+HighSmoke_IncandPart <- ggplot(HighSmoke_SP2, aes(x = DailyIncandParticle)) +
+  geom_histogram(binwidth = 1, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Incandescent Particle Concentration",
+       subtitle = "High Smoke")
+
+
+LowSmoke_IncandPart <- ggplot(LowSmoke_SP2, aes(x = DailyIncandParticle)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low Smoke")
+
+
+library(patchwork)
+HighSmoke_IncandPart + LowSmoke_IncandPart
+```
+
+Most of the time, both high and low smoke periods have concentrations below 10. There are extreme events above 40 during both high and low periods.
+
+I can compare the mean and medians between high and low smoke events:
+```{r}
+# Means and medians
+HighSmoke_IncandSummary <- HighSmoke_SP2 %>%
+  summarise(
+    mean_high = mean(DailyIncandParticle, na.rm = TRUE),
+    median_high = median(DailyIncandParticle, na.rm = TRUE)
+  )
+
+LowSmoke_IncandSummary <- LowSmoke_SP2 %>%
+  summarise(
+    mean_low = mean(DailyIncandParticle, na.rm = TRUE),
+    median_low = median(DailyIncandParticle, na.rm = TRUE)
+  )
+
+HighSmoke_IncandSummary
+LowSmoke_IncandSummary
+```
+Mean high: 4.93
+Mean low: 5.847
+
+Median high: 3.395
+Median low: 3.1855   
+
+The mean is actually higher during low events, but the median is slightly higher during high events. The median makes more sense given the non-normal distirbution.
+
+I will also run a wilcoxon test to determine if incandescent particle concentration differs significantly between high and low events:
+```{r}
+Smoke_Wilcoxon_IncandParticle <- wilcox.test(
+  HighSmoke_SP2$DailyIncandParticle,
+  LowSmoke_SP2$DailyIncandParticle,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+Smoke_Wilcoxon_IncandParticle
+```
+There is not a significant difference in incandescent particle concentration between high and low smoke deposition times.
+
+*Incandescent Mass*
+```{r}
+HighSmoke_IncandMass <- ggplot(HighSmoke_SP2, aes(x = DailyIncandMass)) +
+  geom_histogram(binwidth = 0.5, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Incandescent Mass",
+       subtitle = "High Smoke")
+
+
+LowSmoke_IncandMass <- ggplot(LowSmoke_SP2, aes(x = DailyIncandMass)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low Smoke")
+
+
+HighSmoke_IncandMass + LowSmoke_IncandMass
+```
+
+The incandescent mass concentration looks pretty similar between high and low events as well. There is a really high outlier past 40 in the low smoke events.
+
+I can compare the mean and medians between high and low smoke events:
+```{r}
+# Means and medians
+HighSmoke_IncandMassSummary <- HighSmoke_SP2 %>%
+  summarise(
+    mean_high = mean(DailyIncandMass, na.rm = TRUE),
+    median_high = median(DailyIncandMass, na.rm = TRUE)
+  )
+
+LowSmoke_IncandMassSummary <- LowSmoke_SP2 %>%
+  summarise(
+    mean_low = mean(DailyIncandMass, na.rm = TRUE),
+    median_low = median(DailyIncandMass, na.rm = TRUE)
+  )
+
+HighSmoke_IncandMassSummary
+LowSmoke_IncandMassSummary
+```
+Mean high: 2.69
+Mean low: 3.74
+
+Median high: 1.97
+Median low: 2.08   
+
+The mean and median are actually higher during low events. This is the opposite of what I would expect.
+
+I will also run a wilcoxon test to determine if incandescent mass concentration differs significantly between high and low events:
+```{r}
+Smoke_Wilcoxon_IncandMass <- wilcox.test(
+  HighSmoke_SP2$DailyIncandMass,
+  LowSmoke_SP2$DailyIncandMass,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+Smoke_Wilcoxon_IncandMass
+```
+There is not a significant difference in incandescent mass concentration between high and low smoke deposition times.
+
+*Total Mass*
+```{r}
+HighSmoke_TotalMass <- ggplot(HighSmoke_SP2, aes(x = DailyTotMass)) +
+  geom_histogram(binwidth = 0.5, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Total Mass",
+       subtitle = "High Smoke")
+
+
+LowSmoke_TotalMass <- ggplot(LowSmoke_SP2, aes(x = DailyTotMass)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low Smoke")
+
+
+HighSmoke_TotalMass + LowSmoke_TotalMass
+```
+
+Looks like the total mass was generally lower during high smoke events? There is a high outlier during the low smoke times.
+
+I can compare the mean and medians between high and low smoke events:
+```{r}
+# Means and medians
+HighSmoke_TotalMassSummary <- HighSmoke_SP2 %>%
+  summarise(
+    mean_high = mean(DailyTotMass, na.rm = TRUE),
+    median_high = median(DailyTotMass, na.rm = TRUE)
+  )
+
+LowSmoke_TotalMassSummary <- LowSmoke_SP2 %>%
+  summarise(
+    mean_low = mean(DailyTotMass, na.rm = TRUE),
+    median_low = median(DailyTotMass, na.rm = TRUE)
+  )
+
+HighSmoke_TotalMassSummary
+LowSmoke_TotalMassSummary
+```
+Mean high: 5.08
+Mean low: 6.74
+
+Median high: 4.396
+Median low: 3.99   
+
+The mean and median are actually higher during low events. This is the opposite of what I would expect.
+
+I will also run a wilcoxon test to determine if total mass differs significantly between high and low events:
+```{r}
+Smoke_Wilcoxon_TotMass <- wilcox.test(
+  HighSmoke_SP2$DailyTotMass,
+  LowSmoke_SP2$DailyTotMass,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+Smoke_Wilcoxon_TotMass
+```
+There is not a significant difference in incandescent mass concentration between high and low smoke deposition times.
+
+*Coating Total*
+```{r}
+HighSmoke_Coating <- ggplot(HighSmoke_SP2, aes(x = DailyCoating)) +
+  geom_histogram(binwidth = 1, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Coating Thickness",
+       subtitle = "High Smoke")
+
+
+LowSmoke_Coating <- ggplot(LowSmoke_SP2, aes(x = DailyCoating)) +
+  geom_histogram(binwidth = 0.5, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low Smoke")
+
+
+HighSmoke_Coating + LowSmoke_Coating
+```
+
+Coating thickness seems to follow a fairly normal distribution with one very high outlier in the high smoke category. 
+
+I can compare the mean and medians between high and low smoke events:
+```{r}
+# Means and medians
+HighSmoke_CoatingSummary <- HighSmoke_SP2 %>%
+  summarise(
+    mean_high = mean(DailyCoating, na.rm = TRUE),
+    median_high = median(DailyCoating, na.rm = TRUE)
+  )
+
+LowSmoke_CoatingSummary <- LowSmoke_SP2 %>%
+  summarise(
+    mean_low = mean(DailyCoating, na.rm = TRUE),
+    median_low = median(DailyCoating, na.rm = TRUE)
+  )
+
+HighSmoke_CoatingSummary
+LowSmoke_CoatingSummary
+```
+Mean high: 61.06
+Mean low: 56.19
+
+Median high: 59.69
+Median low: 56.65   
+
+The mean and median are  higher during high events. This is what I would expect.
+
+I will also run a wilcoxon test to determine if total mass differs significantly between high and low events:
+```{r}
+Smoke_Wilcoxon_Coating <- wilcox.test(
+  HighSmoke_SP2$DailyCoating,
+  LowSmoke_SP2$DailyCoating,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+Smoke_Wilcoxon_Coating
+```
+There IS a significant difference in the coating total between high and low smoke events (p < 0.001). The coating thickness is larger during high smoke events.
+
+## Dust {.tabset}
+
+*High Dust times*
+```{r}
+HighDust_SP2 <- DailySP2_NAAPS_Sfc %>%
+  filter(DustEvent == TRUE)
+```
+
+*Low Dust times*
+```{r}
+LowDust_SP2 <- DailySP2_NAAPS_Sfc %>%
+  filter(DustEvent == FALSE)
+```
+
+Then I will plot the four variables of interest during high and low Dust events:
+*Incandescent particle concentration*
+```{r}
+HighDust_IncandPart <- ggplot(HighDust_SP2, aes(x = DailyIncandParticle)) +
+  geom_histogram(binwidth = 0.5, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Incandescent Particle Concentration",
+       subtitle = "High Dust")
+
+
+LowDust_IncandPart <- ggplot(LowDust_SP2, aes(x = DailyIncandParticle)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low Dust")
+
+
+HighDust_IncandPart + LowDust_IncandPart
+```
+
+It seems like the incandescent particle concentrations are higher during low dust events? There are more high outliers.
+
+I can compare the mean and medians between high and low Dust events:
+```{r}
+# Means and medians
+HighDust_IncandSummary <- HighDust_SP2 %>%
+  summarise(
+    mean_high = mean(DailyIncandParticle, na.rm = TRUE),
+    median_high = median(DailyIncandParticle, na.rm = TRUE)
+  )
+
+LowDust_IncandSummary <- LowDust_SP2 %>%
+  summarise(
+    mean_low = mean(DailyIncandParticle, na.rm = TRUE),
+    median_low = median(DailyIncandParticle, na.rm = TRUE)
+  )
+
+HighDust_IncandSummary
+LowDust_IncandSummary
+```
+Mean high: 4.75
+Mean low: 6.06
+
+Median high: 4.26
+Median low: 2.78   
+
+The mean is higher during low events, but the median is higher during high events.
+
+I will also run a wilcoxon test to determine if incandescent particle concentration differs significantly between high and low events:
+```{r}
+Dust_Wilcoxon_IncandParticle <- wilcox.test(
+  HighDust_SP2$DailyIncandParticle,
+  LowDust_SP2$DailyIncandParticle,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+Dust_Wilcoxon_IncandParticle
+```
+There is not a significant difference in incandescent particle concentration between high and low Dust deposition times.
+
+*Incandescent Mass*
+```{r}
+HighDust_IncandMass <- ggplot(HighDust_SP2, aes(x = DailyIncandMass)) +
+  geom_histogram(binwidth = 0.5, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Incandescent Mass",
+       subtitle = "High Dust")
+
+
+LowDust_IncandMass <- ggplot(LowDust_SP2, aes(x = DailyIncandMass)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low Dust")
+
+
+HighDust_IncandMass + LowDust_IncandMass
+```
+
+The incandescent mass concentration looks pretty similar between high and low events as well. There is a really high outlier past 40 in the low Dust events.
+
+I can compare the mean and medians between high and low Dust events:
+```{r}
+# Means and medians
+HighDust_IncandMassSummary <- HighDust_SP2 %>%
+  summarise(
+    mean_high = mean(DailyIncandMass, na.rm = TRUE),
+    median_high = median(DailyIncandMass, na.rm = TRUE)
+  )
+
+LowDust_IncandMassSummary <- LowDust_SP2 %>%
+  summarise(
+    mean_low = mean(DailyIncandMass, na.rm = TRUE),
+    median_low = median(DailyIncandMass, na.rm = TRUE)
+  )
+
+HighDust_IncandMassSummary
+LowDust_IncandMassSummary
+```
+Mean high: 2.79
+Mean low: 3.65
+
+Median high: 2.78
+Median low: 1.77   
+
+The mean is higher during low events, but the median is higher during high events.
+
+I will also run a wilcoxon test to determine if incandescent mass concentration differs significantly between high and low events:
+```{r}
+Dust_Wilcoxon_IncandMass <- wilcox.test(
+  HighDust_SP2$DailyIncandMass,
+  LowDust_SP2$DailyIncandMass,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+Dust_Wilcoxon_IncandMass
+```
+There is not a significant difference in incandescent mass concentration between high and low Dust deposition times.
+
+*Total Mass*
+```{r}
+HighDust_TotalMass <- ggplot(HighDust_SP2, aes(x = DailyTotMass)) +
+  geom_histogram(binwidth = 0.5, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Total Mass",
+       subtitle = "High Dust")
+
+
+LowDust_TotalMass <- ggplot(LowDust_SP2, aes(x = DailyTotMass)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low Dust")
+
+
+HighDust_TotalMass + LowDust_TotalMass
+```
+
+Looks like the total mass was generally higher during lowe Dust events. There is a high outlier during the low Dust times.
+
+I can compare the mean and medians between high and low Dust events:
+```{r}
+# Means and medians
+HighDust_TotalMassSummary <- HighDust_SP2 %>%
+  summarise(
+    mean_high = mean(DailyTotMass, na.rm = TRUE),
+    median_high = median(DailyTotMass, na.rm = TRUE)
+  )
+
+LowDust_TotalMassSummary <- LowDust_SP2 %>%
+  summarise(
+    mean_low = mean(DailyTotMass, na.rm = TRUE),
+    median_low = median(DailyTotMass, na.rm = TRUE)
+  )
+
+HighDust_TotalMassSummary
+LowDust_TotalMassSummary
+```
+Mean high: 5.27
+Mean low: 6.58
+
+Median high: 5.33
+Median low: 3.74   
+
+The mean is lower during high events, but the median is higher during high events.
+
+I will also run a wilcoxon test to determine if total mass differs significantly between high and low events:
+```{r}
+Dust_Wilcoxon_TotMass <- wilcox.test(
+  HighDust_SP2$DailyTotMass,
+  LowDust_SP2$DailyTotMass,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+Dust_Wilcoxon_TotMass
+```
+There is not a significant difference in incandescent mass concentration between high and low Dust deposition times.
+
+*Coating Total*
+```{r}
+HighDust_Coating <- ggplot(HighDust_SP2, aes(x = DailyCoating)) +
+  geom_histogram(binwidth = 1, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Coating Thickness",
+       subtitle = "High Dust")
+
+
+LowDust_Coating <- ggplot(LowDust_SP2, aes(x = DailyCoating)) +
+  geom_histogram(binwidth = 0.5, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low Dust")
+
+
+HighDust_Coating + LowDust_Coating
+```
+
+Coating thickness seems to follow a fairly normal distribution with one very high outlier in the high Dust category. 
+
+I can compare the mean and medians between high and low Dust events:
+```{r}
+# Means and medians
+HighDust_CoatingSummary <- HighDust_SP2 %>%
+  summarise(
+    mean_high = mean(DailyCoating, na.rm = TRUE),
+    median_high = median(DailyCoating, na.rm = TRUE)
+  )
+
+LowDust_CoatingSummary <- LowDust_SP2 %>%
+  summarise(
+    mean_low = mean(DailyCoating, na.rm = TRUE),
+    median_low = median(DailyCoating, na.rm = TRUE)
+  )
+
+HighDust_CoatingSummary
+LowDust_CoatingSummary
+```
+Mean high: 60.47
+Mean low: 56.70
+
+Median high: 58.71
+Median low: 56.19   
+
+The mean and median are higher during high events. This is what I would expect.
+
+I will also run a wilcoxon test to determine if total mass differs significantly between high and low events:
+```{r}
+Dust_Wilcoxon_Coating <- wilcox.test(
+  HighDust_SP2$DailyCoating,
+  LowDust_SP2$DailyCoating,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+Dust_Wilcoxon_Coating
+```
+There IS a significant difference in the coating total between high and low Dust events (p < 0.01). The coating thickness is larger during high Dust events.
+
+## ABF {.tabset}
+
+*High ABF times*
+```{r}
+HighABF_SP2 <- DailySP2_NAAPS_Sfc %>%
+  filter(ABFEvent == TRUE)
+```
+
+*Low ABF times*
+```{r}
+LowABF_SP2 <- DailySP2_NAAPS_Sfc %>%
+  filter(ABFEvent == FALSE)
+```
+
+Then I will plot the four variables of interest during high and low ABF events:
+*Incandescent particle concentration*
+```{r}
+HighABF_IncandPart <- ggplot(HighABF_SP2, aes(x = DailyIncandParticle)) +
+  geom_histogram(binwidth = 1, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Incandescent Particle Concentration",
+       subtitle = "High ABF")
+
+
+LowABF_IncandPart <- ggplot(LowABF_SP2, aes(x = DailyIncandParticle)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low ABF")
+
+
+HighABF_IncandPart + LowABF_IncandPart
+```
+
+The distributions look pretty similar.
+
+I can compare the mean and medians between high and low ABF events:
+```{r}
+# Means and medians
+HighABF_IncandSummary <- HighABF_SP2 %>%
+  summarise(
+    mean_high = mean(DailyIncandParticle, na.rm = TRUE),
+    median_high = median(DailyIncandParticle, na.rm = TRUE)
+  )
+
+LowABF_IncandSummary <- LowABF_SP2 %>%
+  summarise(
+    mean_low = mean(DailyIncandParticle, na.rm = TRUE),
+    median_low = median(DailyIncandParticle, na.rm = TRUE)
+  )
+
+HighABF_IncandSummary
+LowABF_IncandSummary
+```
+Mean high: 5.63
+Mean low: 5.16
+
+Median high: 4.20
+Median low: 2.76   
+
+The mean and median are both higher during high events. This is what I would expect.
+
+I will also run a wilcoxon test to determine if incandescent particle concentration differs significantly between high and low events:
+```{r}
+ABF_Wilcoxon_IncandParticle <- wilcox.test(
+  HighABF_SP2$DailyIncandParticle,
+  LowABF_SP2$DailyIncandParticle,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+ABF_Wilcoxon_IncandParticle
+```
+There is not a significant difference in incandescent particle concentration between high and low ABF deposition times.
+
+*Incandescent Mass*
+```{r}
+HighABF_IncandMass <- ggplot(HighABF_SP2, aes(x = DailyIncandMass)) +
+  geom_histogram(binwidth = 0.5, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Incandescent Mass",
+       subtitle = "High ABF")
+
+
+LowABF_IncandMass <- ggplot(LowABF_SP2, aes(x = DailyIncandMass)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low ABF")
+
+
+HighABF_IncandMass + LowABF_IncandMass
+```
+
+The incandescent mass concentration looks pretty similar between high and low events as well. There is a really high outlier past 40 in the low ABF events.
+
+I can compare the mean and medians between high and low ABF events:
+```{r}
+# Means and medians
+HighABF_IncandMassSummary <- HighABF_SP2 %>%
+  summarise(
+    mean_high = mean(DailyIncandMass, na.rm = TRUE),
+    median_high = median(DailyIncandMass, na.rm = TRUE)
+  )
+
+LowABF_IncandMassSummary <- LowABF_SP2 %>%
+  summarise(
+    mean_low = mean(DailyIncandMass, na.rm = TRUE),
+    median_low = median(DailyIncandMass, na.rm = TRUE)
+  )
+
+HighABF_IncandMassSummary
+LowABF_IncandMassSummary
+```
+Mean high: 3.06
+Mean low: 3.38
+
+Median high: 2.64
+Median low: 1.61   
+
+The mean is slightly higher during low events and the median is a bit higher during high events.
+
+I will also run a wilcoxon test to determine if incandescent mass concentration differs significantly between high and low events:
+```{r}
+ABF_Wilcoxon_IncandMass <- wilcox.test(
+  HighABF_SP2$DailyIncandMass,
+  LowABF_SP2$DailyIncandMass,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+ABF_Wilcoxon_IncandMass
+```
+There is not a significant difference in incandescent mass concentration between high and low ABF deposition times.
+
+*Total Mass*
+```{r}
+HighABF_TotalMass <- ggplot(HighABF_SP2, aes(x = DailyTotMass)) +
+  geom_histogram(binwidth = 0.5, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Total Mass",
+       subtitle = "High ABF")
+
+
+LowABF_TotalMass <- ggplot(LowABF_SP2, aes(x = DailyTotMass)) +
+  geom_histogram(binwidth = 1, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low ABF")
+
+
+HighABF_TotalMass + LowABF_TotalMass
+```
+
+Looks like the total mass was generally lower during high ABF events? There is a high outlier during the low ABF times.
+
+I can compare the mean and medians between high and low ABF events:
+```{r}
+# Means and medians
+HighABF_TotalMassSummary <- HighABF_SP2 %>%
+  summarise(
+    mean_high = mean(DailyTotMass, na.rm = TRUE),
+    median_high = median(DailyTotMass, na.rm = TRUE)
+  )
+
+LowABF_TotalMassSummary <- LowABF_SP2 %>%
+  summarise(
+    mean_low = mean(DailyTotMass, na.rm = TRUE),
+    median_low = median(DailyTotMass, na.rm = TRUE)
+  )
+
+HighABF_TotalMassSummary
+LowABF_TotalMassSummary
+```
+Mean high: 5.71
+Mean low: 6.13
+
+Median high: 4.93
+Median low: 3.52   
+
+The mean is higher during low events and the median is higher during high events.
+
+I will also run a wilcoxon test to determine if total mass differs significantly between high and low events:
+```{r}
+ABF_Wilcoxon_TotMass <- wilcox.test(
+  HighABF_SP2$DailyTotMass,
+  LowABF_SP2$DailyTotMass,
+  alternative = "two.sided"  # or "greater"/"less" if you expect direction
+)
+
+ABF_Wilcoxon_TotMass
+```
+There is a BORDERLINE significant difference in incandescent mass concentration between high and low ABF deposition times (p = 0.06).
+
+*Coating Total*
+```{r}
+HighABF_Coating <- ggplot(HighABF_SP2, aes(x = DailyCoating)) +
+  geom_histogram(binwidth = 1, fill = "tomato", color = "white") +
+  theme_minimal() +
+  labs(title = "Coating Thickness",
+       subtitle = "High ABF")
+
+
+LowABF_Coating <- ggplot(LowABF_SP2, aes(x = DailyCoating)) +
+  geom_histogram(binwidth = 0.5, fill = "cadetblue", color = "white") +
+  theme_minimal()  +
+  labs(subtitle = "Low ABF")
+
+
+HighABF_Coating + LowABF_Coating
+```
+
+Coating thickness seems to follow a fairly normal distribution with one very high outlier in the high ABF category. 
+
+I can compare the mean and medians between high and low ABF events:
+```{r}
+# Means and medians
+HighABF_CoatingSummary <- HighABF_SP2 %>%
+  summarise(
+    mean_high = mean(DailyCoating, na.rm = TRUE),
+    median_high = median(DailyCoating, na.rm = TRUE)
+  )
+
+LowABF_CoatingSummary <- LowABF_SP2 %>%
+  summarise(
+    mean_low = mean(DailyCoating, na.rm = TRUE),
+    median_low = median(DailyCoating, na.rm = TRUE)
+  )
+
+HighABF_CoatingSummary
+LowABF_CoatingSummary
+```
+Mean high: 59.58
+Mean low: 57.60
+
+Median high: 57.88
+Median low: 57.18   
+
+The mean and median are higher during high events. This is what I would expect.
+
+I will also run a wilcoxon test to determine if total mass differs significantly between high and low events:
+```{r}
+ABF_Wilcoxon_Coating <- wilcox.test(
+  HighABF_SP2$DailyCoating,
+  LowABF_SP2$DailyCoating,
+  alternative = "two.sided"  
+)
+
+ABF_Wilcoxon_Coating
+```
+There is not a significant difference in the coating total between high and low ABF events. 
+
+# Summary of Findings
+
+After separating the SP2 data into high/low smoke, dust and ABF days and exploring the NAAPS data in each separation, I found that all four SP2 variables were pretty similar between high and low events.
+
+There were significant differences in the coating thickness between high and low smoke events as well as dust events. There was a borderline significant difference in the total mass between high and low ABF events. 
+
+
+
+
+

@@ -1,0 +1,630 @@
+---
+author: "Ella Hall"
+date: "`r Sys.Date()`"
+title: "SP2 Preliminary Analysis"
+output: 
+  html_document:
+    code_folding: hide
+    theme: simplex
+    toc: yes
+    toc_float: 
+      collapsed: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 10,      # Set default plot width
+  fig.height = 6,     # Set default plot height
+  fig.align = "center" # Align plots to the center
+)
+```
+The goal of this script is to combine the daily SP2 data and flight logs, and filter the data by wind direction and the airstrip angles, then run some summary statistics to figure out how the particles vary based on wind direction and local contamination sources.
+
+# Load the Data
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(PNWColors)
+library(stringr)
+library(purrr)
+```
+
+```{r}
+AllStats <- read.csv("All_SP2_Statistics_Seconds.csv")
+  # Drop NA rows
+  AllStats <- na.omit(AllStats)
+  
+  
+FlightLog <- read.csv("FlightData_Cleaned.csv")
+```
+
+I want to split the `Date_Time` column to just have the date
+
+```{r}
+AllStats <- AllStats %>%
+  separate(Date_Time, into = c("Date", "Time_Min"), sep = " ")
+head(AllStats)
+```
+Clean up date format:
+```{r}
+AllStats$Date <- as.Date(as.character(AllStats$Date), format = "%Y%m%d")
+```
+
+
+# Incandescent Particle Concentration 
+
+First, I will plot the incandescent particle concentration over time to see when the highest concentrations of incandescent particles are occurring. Incandescent particles are BC particles.
+
+```{r}
+ggplot(data = AllStats,
+       mapping = aes(x = (SecondsOfDay/3600), y = IncandParticleConc)) +
+  geom_point(color = 'steelblue4', size = 0.5, alpha = 0.5) +
+  labs(title = "Incandescent Particle Concentration Over Time",
+       x = "Hour of Day",
+       y = "Incandescent Particle Concentration") +
+scale_x_continuous(
+    breaks = 0:24,  # Labels every hour from 0 to 24
+    limits = c(0, 24)
+  ) +
+  theme_minimal()  
+```
+
+It looks like the peak incandescent particle concentration is between about 9:00 and 11:00. There is another little peak around 15:00 as well.
+
+## Summary Stats
+
+I will run some summary statistics on the incandescent particle concentrations over time.
+
+Summary statistics by hour:
+```{r}
+IncandParticleSummary_Hour <- AllStats %>%
+  mutate(Hour = floor(SecondsOfDay / 3600)) %>%
+  group_by(Hour) %>%
+  summarise(mean_Conc = mean(IncandParticleConc, na.rm = TRUE),
+            sd_Conc = sd(IncandParticleConc, na.rm = TRUE),
+            median_Conc = median(IncandParticleConc, na.rm = TRUE),
+            max_Conc = max(IncandParticleConc, na.rm = TRUE),
+            min_Conc = min(IncandParticleConc, na.rm = TRUE),
+            n = n())
+print(IncandParticleSummary_Hour)
+```
+
+Plot mean concentration by hour:
+```{r}
+ggplot(IncandParticleSummary_Hour, aes(x = Hour, y = mean_Conc)) +
+  geom_line(color = "black") +
+  geom_point(size = 1, color = 'steelblue4') +
+  geom_errorbar(aes(ymin = mean_Conc - sd_Conc, ymax = mean_Conc + sd_Conc), width = 0.2, alpha = 0.5) +
+  labs(title = "Hourly Mean Incandescent Particle Concentration",
+       x = "Hour of Day",
+       y = "Particle Concentration (ng/m³)") +
+  theme_minimal()
+```
+There is an increase in the mean incandescent particle concentration around 9am, with increases from about 6am to 9am and then decreases after 10am to about 12pm.
+
+Find when the maximum average concentration occurs:
+```{r}
+IncandParticleSummary_Hour %>%
+  filter(mean_Conc == max(mean_Conc))
+```
+It is at about 9am, not surprisingly.
+
+# Incandescent Mass Concentration
+
+Then, I will plot the incandescent mass concentration over time to see when the highest concentration of incandescent masses are occurring. Incandescent particles are BC particles, but *I am a little confused how the concentration differs from the mass...*
+
+I found that "particle concentration refers to the NUMBER of particles per unit volume, while mass concentration refers to the TOTAL MASS of particles per unit volume".
+
+```{r}
+ggplot(data = AllStats,
+       mapping = aes(x = (SecondsOfDay/3600), y = IncandMassConc)) +
+  geom_point(color = 'steelblue4', size = 0.5, alpha = 0.5) +
+  labs(title = "Incandescent Mass Concentration Over Time",
+       x = "Hour of Day",
+       y = "Incandescent Mass Concentration") +
+scale_x_continuous(
+    breaks = 0:24,  # Labels every hour from 0 to 24
+    limits = c(0, 24)
+  ) +
+  theme_minimal()  
+```
+
+There is a peak around 8am, then a REALLY big peak between 9 and 11am, then some areas of sporadic higher mass concentrations around 3pm and 8pm.
+
+## Summary Stats
+
+I will run some summary statistics on the incandescent mass concentrations over time.
+
+Summary statistics by hour:
+```{r}
+IncandMassSummary_Hour <- AllStats %>%
+  mutate(Hour = floor(SecondsOfDay / 3600)) %>%
+  group_by(Hour) %>%
+  summarise(mean_Conc = mean(IncandMassConc, na.rm = TRUE),
+            sd_Conc = sd(IncandMassConc, na.rm = TRUE),
+            median_Conc = median(IncandMassConc, na.rm = TRUE),
+            max_Conc = max(IncandMassConc, na.rm = TRUE),
+            min_Conc = min(IncandMassConc, na.rm = TRUE),
+            n = n())
+print(IncandMassSummary_Hour)
+```
+
+Plot mean concentration by hour:
+```{r}
+ggplot(IncandMassSummary_Hour, aes(x = Hour, y = mean_Conc)) +
+  geom_line(color = "black") +
+  geom_point(size = 1, color = 'steelblue4') +
+  geom_errorbar(aes(ymin = mean_Conc - sd_Conc, ymax = mean_Conc + sd_Conc), width = 0.2, alpha = 0.5) +
+  labs(title = "Hourly Mean Incandescent Mass Concentration",
+       x = "Hour of Day",
+       y = "Mean Concentration (ng/m³)") +
+  theme_minimal()
+```
+The highest mean concentration is around 10am, with increases starting from about 6am to 10am and then decreasing until about 1pm.
+
+Find when the maximum average concentration occurs:
+```{r}
+IncandMassSummary_Hour %>%
+  filter(mean_Conc == max(mean_Conc))
+```
+The maximum average mass concentration is in hour 10. This is slightly later than the average incandescent particle concentration.
+
+# Scattering Particle Concentration 
+
+First, I will plot the scattering particle concentration over time to see when the highest concentrations of scattering particles are occurring. Scattering particles are **NON-rBC particles.**
+
+```{r}
+ggplot(data = AllStats,
+       mapping = aes(x = (SecondsOfDay/3600), y = ScatteringParticleConc)) +
+  geom_point(color = 'steelblue4', size = 0.5, alpha = 0.5) +
+  labs(title = "Scattering Particle Concentration Over Time",
+       x = "Hour of Day",
+       y = "Scattering Particle Concentration") +
+scale_x_continuous(
+    breaks = 0:24,  # Labels every hour from 0 to 24
+    limits = c(0, 24)
+  ) +
+  theme_minimal()  
+```
+
+Scattering particle concentration is much more evenly spread throughout the day. There are two very high outliers around 11pm...
+
+## Summary Stats
+
+I will run some summary statistics on the scattering particle concentrations over time.
+
+Summary statistics by hour:
+```{r}
+ScatteringParticleSummary_Hour <- AllStats %>%
+  mutate(Hour = floor(SecondsOfDay / 3600)) %>%
+  group_by(Hour) %>%
+  summarise(mean_Conc = mean(ScatteringParticleConc, na.rm = TRUE),
+            sd_Conc = sd(ScatteringParticleConc, na.rm = TRUE),
+            median_Conc = median(ScatteringParticleConc, na.rm = TRUE),
+            max_Conc = max(ScatteringParticleConc, na.rm = TRUE),
+            min_Conc = min(ScatteringParticleConc, na.rm = TRUE),
+            n = n())
+print(ScatteringParticleSummary_Hour)
+```
+
+Plot mean scattering particle concentration by hour:
+```{r}
+ggplot(ScatteringParticleSummary_Hour, aes(x = Hour, y = mean_Conc)) +
+  geom_line(color = "black") +
+  geom_point(size = 1, color = 'steelblue4') +
+  geom_errorbar(aes(ymin = mean_Conc - sd_Conc, ymax = mean_Conc + sd_Conc), width = 0.2, alpha = 0.5) +
+  labs(title = "Hourly Mean Scattering Particle Concentration",
+       x = "Hour of Day",
+       y = "Scattering Particle Concentration (ng/m³)") +
+  theme_minimal()
+```
+The average scattering particle concentration each hour is pretty consistent. The average at hour 22 is skewed by the two very high outliers.
+
+
+Find when the maximum average concentration occurs:
+```{r}
+ScatteringParticleSummary_Hour %>%
+  filter(mean_Conc == max(mean_Conc))
+```
+The max average concentration is during hour 22, probably due to the two high outliers.
+
+# Filter By Wind Direction
+
+## Airstrip
+
+I will start by filtering the data to include wind directions that came from the airstrip and all other wind directions
+```{r}
+AllStats$AirstripAngle <- ifelse(AllStats$ambWD >= 336 | AllStats$ambWD <= 52,
+                             "Airstrip", "other")
+
+# Make airstrip data separate dataest
+AirStripData <- AllStats[AllStats$AirstripAngle == "Airstrip", ]
+```
+
+```{r}
+ggplot(AllStats, aes(x = AirstripAngle, y = log(IncandParticleConc))) +
+  geom_boxplot() +
+  labs(title = "Incandescent Particle Concentration by Airstrip Wind Direction",
+       y= "log(Incandescent Particle Concentration)",
+       x = "Airstrip Wind Direction") +
+  theme_minimal()
+```
+
+It does look like the log transformed incandescent particle concentration is higher for wind directions coming from the airstrip than other directions.
+
+## Ordinal Wind Direction
+I separated the data by wind directions that include the airstrip, so now I will add another column for North, South, East and West.
+
+- North = 337.5º - 22.5º
+- Northeast = 22.5º - 67.5º
+- East = 67.5º - 112.5º
+- Southeast = 112.5º - 157.5º
+- South = 157.5º - 202.5º
+- Southwest = 202.5º - 247.5º
+- West = 247.5º - 292.5º
+- Northwest = 292.5º - 337.5º
+```{r}
+AllStats$WindDirection <- with(AllStats, ifelse(
+  ambWD >= 337.5 | ambWD < 22.5, "N",
+  ifelse(ambWD >= 22.5 & ambWD < 67.5, "NE",
+  ifelse(ambWD >= 67.5 & ambWD < 112.5, "E",
+  ifelse(ambWD >= 112.5 & ambWD < 157.5, "SE",
+  ifelse(ambWD >= 157.5 & ambWD < 202.5, "S",
+  ifelse(ambWD >= 202.5 & ambWD < 247.5, "SW",
+  ifelse(ambWD >= 247.5 & ambWD < 292.5, "W",
+  "NW"))))))))
+```
+
+### Plot Incandescent Particle Concentration by Cardinal and Ordinal Wind Direction
+
+I can make boxplots to show the incandescent particle concentration to compare between wind coming from the each wind direction:
+```{r}
+ggplot(AllStats, aes(x = WindDirection, y = log(IncandParticleConc))) +
+  geom_boxplot() +
+  labs(title = "Incandescent Particle Concentration by Wind Direction",
+       y= "log(Incandescent Particle Concentration)",
+       x = "Wind Direction") +
+  theme_minimal()
+```
+There isn't a ton to show here... I log transformed the incandescent particle concentration so that it was easier to see since there are a lot of very high outliers.
+
+I can summarize the mean incandescent particle concentration by wind direction to see which direction has the highest concentrations of incandescent particles.
+```{r}
+# Summarize data: mean concentration per wind direction
+WindSummary <- AllStats %>%
+  group_by(WindDirection) %>%
+  summarise(MeanConc = mean(IncandParticleConc, na.rm = TRUE))
+
+# Order the data by direction:
+AllStats$WindDirection <- factor(AllStats$WindDirection,
+                               levels = c("N", "NE", "E", "SE", "S", "SW", "W", "NW"))
+
+# Choose a PNWColors palette with 8 values
+pnw_palette <- pnw_palette("Bay", 8)
+
+# Create the bar plot
+ggplot(WindSummary, aes(x = WindDirection, y = MeanConc, fill = WindDirection)) +
+  geom_col() +
+  scale_fill_manual(values = pnw_palette, name = "Wind Direction") +
+  labs(
+    title = "Mean Incandescent Particle Concentration by Wind Direction",
+    x = "Wind Direction",
+    y = "Mean Concentration (ng/m³)"
+  ) +
+  theme_minimal()
+```
+
+It looks like the highest concentration are coming from the southwest... Canadian fires and airstrip? The second highest are from the Northeast, which could potentially be local contamination from some of the other buildings, or air that is coming off of the ice sheet.
+
+# Make the Flight Data Workable and Combinable 
+
+The flight log gives small windows of time when planes were taking off and arriving. The columns I care about are `Date`, `ActualArrival` and `ActualDeparture`. I will start by subsetting the dataframe to just include these columns so it's easier to work with:
+
+```{r}
+FlightLog_Subset <- FlightLog[, c("Date", "ActualArrival", "ActualDeparture")]
+```
+
+Then, I will drop any days that don't have any flights:
+```{r}
+FlightLog_Clean <- FlightLog_Subset %>%
+  mutate(
+    ActualArrival = str_trim(ActualArrival), # clean up white space or weird formatting
+    ActualDeparture = str_trim(ActualDeparture)
+  ) %>%
+  filter(!(ActualArrival == "" & ActualDeparture == "")) # drop rows where there is no arrival or departure. Keep if there is at least one
+
+# Clean up date:
+FlightLog_Clean$Date <- as.Date(FlightLog_Clean$Date)
+```
+
+Now, I need to convert the `ActualArrival` and `ActualDeparture` time into Time_Min to match with the `AllStats` column.
+```{r}
+# Step 1: Combine Date and time strings into a proper datetime
+FlightLog_Clean$ArrivalTime <- as.POSIXct(
+  paste(FlightLog_Clean$Date, FlightLog_Clean$ActualArrival),
+  format = "%Y-%m-%d %H:%M", 
+  tz = "America/Thule"  # local time zone at Pituffik
+)
+
+FlightLog_Clean$DepartureTime <- as.POSIXct(
+  paste(FlightLog_Clean$Date, FlightLog_Clean$ActualDeparture),
+  format = "%Y-%m-%d %H:%M",
+  tz = "America/Thule",
+)
+
+# Convert to UTC to match times in AllStats dataframe
+FlightLog_Clean$ArrivalTime <- lubridate::with_tz(FlightLog_Clean$ArrivalTime, "UTC")
+FlightLog_Clean$DepartureTime <- lubridate::with_tz(FlightLog_Clean$DepartureTime, "UTC")
+```
+
+I will add 5-minute buffers to either side of the arrival and departure times as a "grace period". 
+```{r}
+FlightLog_Clean <- FlightLog_Clean %>%
+  rowwise() %>%
+  mutate(
+    ArrivalWindow = if (!is.na(ArrivalTime)) {
+      list(format(seq(ArrivalTime - 300, ArrivalTime + 300, by = 60), "%H:%M:01")) # add one second
+    } else {
+      list(NA)
+    },
+    DepartureWindow = if (!is.na(DepartureTime)) {
+      list(format(seq(DepartureTime - 300, DepartureTime + 300, by = 60), "%H:%M:01")) # add one second
+    } else {
+      list(NA)
+    }
+  ) %>%
+  ungroup() %>%
+  mutate(
+    FlightWindow_FiveMin = map2(ArrivalWindow, DepartureWindow, ~ unique(na.omit(c(.x, .y))))
+  )
+```
+
+Now the `FlightWindow_FiveMin` is a nested string of minutes. I need to un-nest it and make each minute its own observation (row).
+
+```{r}
+FlightLog_Minutes <- FlightLog_Clean %>%
+  select(Date, FlightWindow_FiveMin) %>%
+  unnest(FlightWindow_FiveMin) 
+
+# Subset to only include dates that the SP2 is running for
+FlightLog_Minutes <- FlightLog_Minutes %>%
+  filter(Date >= as.Date("2024-06-19") & Date <= as.Date("2024-09-29"))
+```
+
+I will make a new column in both the flight log dataframe AND the all stats dataframe that has date and time that I can use to join the dataframes.
+```{r}
+# In AllStats
+AllStats <- AllStats %>%
+  mutate(DateTime = as.POSIXct(paste(Date, Time_Min), format = "%Y-%m-%d %H:%M:%S", tz = "UTC"))
+
+# In FlightLog_Minutes
+FlightLog_Minutes <- FlightLog_Minutes %>%
+  mutate(DateTime = as.POSIXct(paste(Date, FlightWindow_FiveMin), format = "%Y-%m-%d %H:%M:%S", tz = "UTC"))
+```
+
+Now, I can join the dataframes:
+```{r}
+AllStats_FlightWindow_FiveMins <- AllStats %>%
+  left_join(FlightLog_Minutes, by = "DateTime")
+```
+
+# Filter the Data by Flights
+
+I will rename some of the columns to clean up the dataframe, then add a coulumn to flag the times that are during flights.
+```{r}
+AllStats_FlightWindow_FiveMins <- AllStats_FlightWindow_FiveMins %>%
+  select(-Date.y, -DateTime) %>% # deselect columns that I don't need
+  rename(Date = Date.x)
+```
+
+Now, I will flag rows that are occurring during a flight window:
+```{r}
+SP2_FlightLogMerged <- AllStats_FlightWindow_FiveMins %>%
+  mutate(DuringFlight = !is.na(FlightWindow_FiveMin))
+```
+
+And then export this as a .csv file
+```{r}
+write.csv(SP2_FlightLogMerged, "SP2_FlightLogMerged.csv")
+```
+
+# Incandescent Particles During Flights
+
+I will plot the incandescent particle concentration and make bars to show the flight windows.
+
+First, I will filter the data to only include wind directions that came from the airstrip
+```{r}
+AirStripData <- SP2_FlightLogMerged %>%
+  filter(AirstripAngle == "Airstrip") # only include airstrip angles
+```
+
+Then, I need to identify flight windows by finding consecutive blocks of TRUE:
+
+```{r}
+FlightWindows <- AirStripData %>%
+  mutate(DuringFlight = as.logical(DuringFlight),
+         Group = cumsum(DuringFlight != lag(DuringFlight, default = FALSE))) %>%
+  filter(DuringFlight) %>%
+  group_by(Group) %>%
+  summarize(Start = min(SecondsOfDay / 3600),
+            End = max(SecondsOfDay / 3600))
+```
+
+```{r}
+ggplot(AirStripData, aes(x = (SecondsOfDay / 3600), y = IncandParticleConc)) +
+  # Shade flight windows as rectangles
+  geom_rect(data = FlightWindows,
+            aes(xmin = Start, xmax = End,
+                ymin = -Inf, ymax = Inf),
+            fill = "red4", alpha = 0.3, inherit.aes = FALSE) +
+  # Add particle concentration points
+  geom_point(color = "black", alpha = 0.6) + 
+  labs(x = "Hour of Day",
+       y ="Incandescent Particle Concentration",
+       title = "Incandescent Particle Concentrations During Flights",
+       subtitle = "Wind Direction = from Airstrip") +
+  theme_minimal()
+```
+
+This plot is showing the incandescent mass concentrations from data that is filtered by wind directions that would be coming from the airstrip. The bars indicate flight windows (5 min on either side of a departure or arrival). There are no clear peaks that I am seeing that would indicate that incandescent mass concentrations are higher during flight windows. 
+
+# Incandescent Mass Concentration During Flights
+```{r}
+ggplot(AirStripData, aes(x = (SecondsOfDay / 3600), y = IncandMassConc)) +
+  # Shade flight windows as rectangles
+  geom_rect(data = FlightWindows,
+            aes(xmin = Start, xmax = End,
+                ymin = -Inf, ymax = Inf),
+            fill = "red4", alpha = 0.3, inherit.aes = FALSE) +
+  # Add particle concentration points
+  geom_point(color = "black", alpha = 0.6) + 
+  labs(x = "Hour of Day",
+       y ="Incandescent Mass Concentration",
+       title = "Incandescent Mass Concentrations During Flights",
+       subtitle = "Wind Direction = from Airstrip") +
+  theme_minimal()
+```
+The incandescent MASS concentration shows a very large peak before a majority of the flight windows...this makes me wonder if the times are perhaps shifted somehow? Or what is going on here...
+
+# Summary Stats by Wind Direction During Max rBC Peaks
+
+These are from the plot that Darrel shared with the peaks showing wind direction at max rBC.
+
+The wind directions during the peaks that I will filter for are:
+- *140 - 160*
+
+- *360 - 60*
+
+- *300 - 340*
+
+- *40 - 60*
+
+I will add a new column to the dataset called `Peak` and filter the `ambWD` to include the windows above:
+```{r}
+SP2_FlightLogMerged <- SP2_FlightLogMerged %>%
+  mutate(
+    ambWD = ambWD %% 360,
+    Peak = case_when(
+      ambWD >= 140 & ambWD <= 160 ~ "Peak1",
+      ambWD >= 300 & ambWD <= 340 ~ "Peak2",
+      ambWD <= 0 | ambWD >= 60  ~ "Peak3"
+    )
+  )
+```
+
+Ok, now I have the peaks separated out in the dataset. I can run some summary statistics on each of the peaks to see how they compare.
+```{r}
+SP2_FlightLogMerged %>%
+  group_by(Peak) %>%
+  summarise(
+    mean_WD = mean(ambWD, na.rm = TRUE), # average wind direction
+    mean_incandConc = mean(IncandParticleConc, na.rm = TRUE), # average incandescent particle concentration
+    mean_incandMass = mean(IncandMassConc, na.rm = TRUE), # average incandescent particle mass
+    mean_Coating = mean(coatingTotal, na.rm = TRUE), # average coating
+    mean_CoatingThickness = mean(coatingModeEOD, na.rm = TRUE), # average diameter of peak coating thickness
+    mean_Time = mean(SecondsOfDay, na.rm = TRUE) # average time of day (seconds)
+    
+  )
+```
+
+```{r}
+Peak_Table <- SP2_FlightLogMerged %>%
+  filter(!is.na(Peak)) %>%
+  group_by(Peak) %>%
+  summarise(
+    mean_WD = mean(ambWD, na.rm = TRUE),
+    mean_incandConc = mean(IncandParticleConc, na.rm = TRUE),
+    mean_incandMass = mean(IncandMassConc, na.rm = TRUE),
+    mean_Coating = mean(coatingTotal, na.rm = TRUE),
+    mean_CoatingThickness = mean(coatingModeEOD, na.rm = TRUE),
+    mean_Time = mean(SecondsOfDay, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 2))) %>%
+  rename(
+    `Peak` = Peak,
+    `Avg Wind Direction` = mean_WD,
+    `Avg Incand Particle Conc` = mean_incandConc,
+    `Avg Incand Particle Mass` = mean_incandMass,
+    `Avg Coating` = mean_Coating,
+    `Avg Diameter of Peak Coating Thickness` = mean_CoatingThickness,
+    `Avg Time of Day (s)` = mean_Time
+  )
+
+Peak_Table
+```
+
+```{r}
+library(knitr)
+
+kable(Peak_Table, caption = "Summary Statistics by Wind Direction Peak", digits = 2)
+```
+
+# Coating Thickness as a Function of Wind Direction
+
+I am interested in seeing how the coating thickness of the particles varies by wind direction. I can use a circular (polar) plot that shows the wind directions on a compass rose format.
+
+First, I will plot `coatingModeEOD`, which is a size distribution of coating thickness by particle size. It shows where the coating is forming on particles by size. It is the equivalent coating thickness.
+```{r}
+ggplot(AllStats, aes(x = ambWD, y = coatingModeEOD)) +
+  geom_point(alpha = 0.5, color = "steelblue4") +
+  coord_polar(theta = "x", start = 0) +
+  scale_x_continuous(limits = c(0,360), breaks = seq(0,360, by = 45)) +
+  labs(
+    title = "Coating Mode EOD by Wind Direction",
+    x = "Wind Direction (º)",
+    y = "Coating Thickness (nm)") +
+  theme_minimal()
+```
+
+It looks like the particles with the largest coating thickness are coming from the southeast between 115 and 160ish degrees. There are also some thick coatings directly North of the SP2. There is a smattering of thick coatings coming from between 270 and 315 degrees as well, which might be airstrip-related?
+
+
+Then, I will plot `coatingTotal`, which is the added up coating thickness for all particles in that time period (minute). It gives an idea of how much "stuff" is being mixed with rBC nad is related with the total number of particles.
+```{r}
+ggplot(AllStats, aes(x = ambWD, y = coatingTotal)) +
+  geom_point(alpha = 0.5, color = "coral3") +
+  coord_polar(theta = "x", start = 0) +
+  scale_x_continuous(limits = c(0,360), breaks = seq(0,360, by = 45)) +
+  labs(
+    title = "Coating Total by Wind Direction",
+    x = "Wind Direction (º)",
+    y = "Coating Total (nm)") +
+  theme_minimal()
+```
+
+In this plot, the highest coating totals are between 270 and 360 degrees, so from the West/Northwest. I am still a little confused about what the difference between EOD and coating total is though...
+
+
+Then, I will plot `IncandMassConc`, which is the incandescent mass concentration, which is the average mass of incandescing particles (BC).
+```{r}
+ggplot(AllStats, aes(x = ambWD, y = IncandMassConc)) +
+  geom_point(alpha = 0.5, color = "plum4") +
+  coord_polar(theta = "x", start = 0) +
+  scale_x_continuous(limits = c(0,360), breaks = seq(0,360, by = 45)) +
+  labs(
+    title = "Incandescent Mass Concentration by Wind Direction",
+    x = "Wind Direction (º)",
+    y = "Incandescent Mass Concentration (ng/m³)") +
+  theme_minimal()
+```
+
+Then, I will plot `IncandParticleConc`, which is the average concentration of incandescing particled (BC) that are measured each minute.
+```{r}
+ggplot(AllStats, aes(x = ambWD, y = IncandParticleConc)) +
+  geom_point(alpha = 0.5, color = "turquoise4") +
+  coord_polar(theta = "x", start = 0) +
+  scale_x_continuous(limits = c(0,360), breaks = seq(0,360, by = 45)) +
+  labs(
+    title = "Incandescent Particle Concentration by Wind Direction",
+    x = "Wind Direction (º)",
+    y = "Incandescent Particle Concentration (particles/cm³)") +
+  theme_minimal()
+```
+
